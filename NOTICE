@@ -1,0 +1,8 @@
+Cerca Foto — Pony10 (IZ2OII)
+
+Modello app/src/main/assets/facenet_512.tflite:
+  FaceNet (512-d) convertito in TFLite, dal progetto
+  shubham0204/FaceRecognition_With_FaceNet_Android — Apache License 2.0.
+  Modello originale: David Sandberg, facenet (MIT).
+
+Google ML Kit (image labeling, face detection, text recognition) — modelli inclusi nell'APK, esecuzione sul dispositivo.

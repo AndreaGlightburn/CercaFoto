@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- cornice foto -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M30,34h40a4,4 0,0 1,4 4v28a4,4 0,0 1,-4 4h-40a4,4 0,0 1,-4 -4v-28a4,4 0,0 1,4 -4zM31,39v26h38v-26z" />
+    <!-- montagne -->
+    <path android:fillColor="#FFFFFF" android:pathData="M33,63l10,-12l7,8l5,-5l12,9z" />
+    <!-- sole -->
+    <path android:fillColor="#FFFFFF" android:pathData="M60,46m-4,0a4,4 0,1 1,8 0a4,4 0,1 1,-8 0" />
+    <!-- lente -->
+    <path android:fillColor="#FFD54F"
+        android:pathData="M70,60m-11,0a11,11 0,1 1,22 0a11,11 0,1 1,-22 0zM70,60m-7,0a7,7 0,1 0,14 0a7,7 0,1 0,-14 0z" />
+    <path android:fillColor="#FFD54F" android:pathData="M77,68l3,-3l9,9l-3,3z" />
+</vector>
