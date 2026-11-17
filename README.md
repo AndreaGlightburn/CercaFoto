@@ -5,6 +5,9 @@ App Android (Kotlin + Compose) per cercare le foto del telefono per contenuto, p
 
 - Riconosce ~440 categorie (ML Kit Image Labeling), con ricerca in italiano: "cane al mare", "gruppi 2024", "selfie agosto"
 - Trova i volti (ML Kit Face Detection) e li raggruppa per persona (FaceNet 512, TFLite); i gruppi si possono nominare, unire, correggere
+- Stima età e sesso apparenti dei volti, colore di capelli e abiti, colori dominanti: "donna anziana", "ragazzo capelli biondi", "maglia rossa"
+- Etichette modificabili a mano (togli quelle sbagliate, aggiungi le tue)
+- Cartelle aggiuntive e unità esterne (chiavetta USB/OTG) tramite selettore di Android
 - Legge il testo nelle foto (ML Kit Text Recognition) per cercare scontrini, documenti, cartelli
 - Indicizzazione in background (WorkManager, servizio in primo piano), incrementale
 

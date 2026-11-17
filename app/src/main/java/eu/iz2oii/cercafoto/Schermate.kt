@@ -5,12 +5,16 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.util.LruCache
 import android.util.Size
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -61,7 +65,8 @@ import kotlin.math.min
 
 private val SUGGERIMENTI = listOf(
     "Persone", "Gruppi", "Selfie", "Sorrisi", "Animali", "Cani", "Gatti", "Cibo", "Mare", "Montagna",
-    "Natura", "Neve", "Città", "Auto", "Feste", "Bambini", "Documenti", "Scontrini", "Screenshot",
+    "Natura", "Neve", "Città", "Auto", "Feste", "Bambini", "Donne", "Uomini", "Anziani", "Giovani",
+    "Capelli biondi", "Rosso", "Blu", "Verde", "Colorate", "Documenti", "Scontrini", "Screenshot", "Chiavetta",
 )
 
 // ---------------------------------------------------------------- CERCA
@@ -147,7 +152,9 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
     val ctx = LocalContext.current
     val persone by vm.persone.collectAsStateWithLifecycle()
     val stato = rememberPagerState(initialPage = iniziale.coerceIn(0, max(0, lista.size - 1))) { lista.size }
+    val tutte by vm.foto.collectAsStateWithLifecycle()
     var info by remember { mutableStateOf(false) }
+    var modifica by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         HorizontalPager(stato, Modifier.fillMaxSize(), key = { lista[it].id }) { p ->
             AsyncImage(
@@ -156,7 +163,8 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
                 modifier = Modifier.fillMaxSize().clickable { info = !info }
             )
         }
-        val f = lista.getOrNull(stato.currentPage) ?: return@Box
+        val f0 = lista.getOrNull(stato.currentPage) ?: return@Box
+        val f = tutte.firstOrNull { it.id == f0.id } ?: f0
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(chiudi) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Indietro", tint = Color.White) }
             Text("${stato.currentPage + 1} / ${lista.size}", color = Color.White, modifier = Modifier.weight(1f))
@@ -176,19 +184,88 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
                 Text("${f.album} · ${f.nome}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                 val nomi = persone.filter { it.id in f.persone }.map { it.nome ?: "persona senza nome" }
                 if (f.volti > 0) Text("Volti: ${f.volti}" + if (nomi.isNotEmpty()) " — ${nomi.joinToString(", ")}" else "", color = Color.White)
+                for (a in f.attr) Text("• " + descriviVolto(a, persone), color = Color.White, style = MaterialTheme.typography.bodySmall)
                 if (f.etichette.isNotEmpty())
                     Text("Contiene: " + f.etichette.entries.sortedByDescending { it.value }.joinToString(", ") { Dizionario.italiano(it.key) },
                         color = Color.White)
+                if (f.manuali.isNotEmpty()) Text("Tue etichette: " + f.manuali.joinToString(", "), color = Color(0xFFFFD54F))
+                if (f.colori.isNotEmpty())
+                    Text("Colori: " + f.colori.entries.sortedByDescending { it.value }.take(4).joinToString(", ") { "${it.key} ${it.value}%" },
+                        color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                if (f.cartella != null) Text("Da: " + nomeCartella(f.cartella), color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                 if (f.testoOriginale.isNotBlank())
                     Text("Testo letto: " + f.testoOriginale.take(400).replace('\n', ' '), color = Color.LightGray,
                         style = MaterialTheme.typography.bodySmall)
                 TextButton({
                     val i = Intent(Intent.ACTION_VIEW).setDataAndType(f.uri, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                     runCatching { ctx.startActivity(i) }
-                }) { Text("Apri nella Galleria") }
+                }) { Text(if (f.cartella != null) "Apri con…" else "Apri nella Galleria") }
+                TextButton({ modifica = true }) { Text("Modifica etichette") }
             }
         }
     }
+    if (modifica) {
+        val f = lista.getOrNull(stato.currentPage)?.let { x -> tutte.firstOrNull { it.id == x.id } ?: x }
+        if (f != null) DialogoEtichette(f, { modifica = false }) { man, rim -> vm.salvaEtichette(f.id, man, rim) }
+    }
+}
+
+fun descriviVolto(a: VoltoAttr, persone: List<Persona>): String {
+    val nome = persone.firstOrNull { it.id == a.persona }?.nome
+    val chi = when {
+        a.eta < 12 -> if (a.maschio > 0.6f) "bambino" else if (a.maschio < 0.4f) "bambina" else "bambino/a"
+        a.eta < 30 -> if (a.maschio > 0.6f) "ragazzo" else if (a.maschio < 0.4f) "ragazza" else "giovane"
+        a.eta >= 60 -> if (a.maschio > 0.6f) "uomo anziano" else if (a.maschio < 0.4f) "donna anziana" else "persona anziana"
+        else -> if (a.maschio > 0.6f) "uomo" else if (a.maschio < 0.4f) "donna" else "persona"
+    }
+    val parti = mutableListOf((nome?.let { "$it, " } ?: "") + "$chi, circa ${a.eta.toInt()} anni (stima)")
+    a.capelli?.let { parti += "capelli " + mapOf("nero" to "neri", "castano" to "castani", "biondo" to "biondi", "rosso" to "rossi", "grigio" to "grigi/bianchi")[it] }
+    a.abiti?.let { parti += "abiti $it" }
+    return parti.joinToString(", ")
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun DialogoEtichette(f: FotoIdx, chiudi: () -> Unit, salva: (List<String>, Set<String>) -> Unit) {
+    var manuali by remember(f.id) { mutableStateOf(f.manuali) }
+    var rimosse by remember(f.id) { mutableStateOf(f.rimosse) }
+    val automatiche = remember(f.id) { (f.etichette.keys + f.rimosse).sortedBy { Dizionario.italiano(it) } }
+    var nuova by remember { mutableStateOf("") }
+    fun aggiungi() { val t = nuova.trim(); if (t.isNotEmpty() && t !in manuali) manuali = manuali + t; nuova = "" }
+    AlertDialog(
+        onDismissRequest = chiudi,
+        title = { Text("Etichette della foto") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Aggiungi le tue", fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(nuova, { nuova = it }, Modifier.weight(1f), singleLine = true,
+                        placeholder = { Text("es. Sardegna 2023") },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { aggiungi() }))
+                    TextButton(::aggiungi) { Text("Aggiungi") }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (m in manuali) InputChip(true, { manuali = manuali - m }, label = { Text(m) },
+                        trailingIcon = { Icon(Icons.Default.Close, "Togli", Modifier.size(16.dp)) })
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("Trovate in automatico", fontWeight = FontWeight.Bold)
+                Text("Tocca per togliere o rimettere.", style = MaterialTheme.typography.bodySmall)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (e in automatiche) {
+                        val attiva = e !in rimosse
+                        FilterChip(attiva, { rimosse = if (attiva) rimosse + e else rimosse - e },
+                            label = { Text(Dizionario.italiano(e)) },
+                            trailingIcon = { if (attiva) Icon(Icons.Default.Close, "Togli", Modifier.size(16.dp)) })
+                    }
+                }
+                if (automatiche.isEmpty()) Text("Nessuna.", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = { TextButton({ aggiungi(); salva(manuali, rimosse); chiudi() }) { Text("Salva") } },
+        dismissButton = { TextButton(chiudi) { Text("Annulla") } },
+    )
 }
 
 // ---------------------------------------------------------------- PERSONE
@@ -198,7 +275,7 @@ private object CacheVolti { val lru = LruCache<Long, ImageBitmap>(300) }
 private fun caricaVolto(ctx: Context, p: Persona): ImageBitmap? {
     val bw = max(p.r - p.l, 0.02f)
     val lato = (240f / bw).toInt().coerceIn(240, 2048)
-    var bmp = ctx.contentResolver.loadThumbnail(uriFoto(p.coverFoto), Size(lato, lato), null)
+    var bmp = ctx.contentResolver.loadThumbnail(p.coverUri, Size(lato, lato), null)
     val w = bmp.width; val h = bmp.height
     val mx = (p.r - p.l) * 0.2f; val my = (p.b - p.t) * 0.2f
     val l = (max(0f, p.l - mx) * w).toInt(); val t = (max(0f, p.t - my) * h).toInt()
@@ -349,6 +426,8 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
     var soglia by remember { mutableFloatStateOf(Impostazioni.soglia(ctx)) }
     var confermaAzzera by remember { mutableStateOf(false) }
     val versione = remember { BuildConfig.VERSION_NAME }
+    val cartelle by vm.cartelle.collectAsStateWithLifecycle()
+    val sceltaCartella = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { u -> u?.let { vm.aggiungiCartella(it) } }
 
     LaunchedEffect(av.attivo) { vm.ricarica() }
 
@@ -364,6 +443,10 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 when {
                     av.attivo && av.fase == "volti" -> { Text("Raggruppo i volti…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                    av.attivo && av.fase == "completamento" && av.totale > 0 -> {
+                        Text("Aggiorno le foto già analizzate (colori, età, capelli, abiti): ${av.fatte} di ${av.totale}")
+                        LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
+                    }
                     av.attivo && av.totale > 0 -> {
                         Text("Analisi foto ${av.fatte} di ${av.totale}")
                         LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
@@ -420,6 +503,20 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
             }
         }
 
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Cartelle e unità esterne", fontWeight = FontWeight.Bold)
+                Text("La galleria (memoria interna e scheda SD) è già inclusa. Qui puoi aggiungere una chiavetta USB, un disco esterno o altre cartelle.",
+                    style = MaterialTheme.typography.bodySmall)
+                for (c in cartelle) Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(nomeCartella(c), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    IconButton({ vm.rimuoviCartella(c) }) { Icon(Icons.Default.Close, "Rimuovi") }
+                }
+                OutlinedButton({ sceltaCartella.launch(null) }) { Text("Aggiungi cartella o unità esterna") }
+                Text("Se scolleghi l'unità, le sue foto restano cercabili; per aprirle va ricollegata.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
         Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
             Column(Modifier.padding(16.dp)) {
                 Text("🔒 Privacy", fontWeight = FontWeight.Bold)
@@ -437,7 +534,7 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
         AlertDialog(
             onDismissRequest = { confermaAzzera = false },
             title = { Text("Rianalizzare tutto?") },
-            text = { Text("Cancello l'indice e rianalizzo tutte le foto. I nomi dati alle persone andranno persi.") },
+            text = { Text("Cancello l'indice e rianalizzo tutte le foto. I nomi dati alle persone e le etichette aggiunte a mano andranno persi.") },
             confirmButton = { TextButton({ vm.azzeraEReindicizza(); confermaAzzera = false }) { Text("Rianalizza") } },
             dismissButton = { TextButton({ confermaAzzera = false }) { Text("Annulla") } },
         )

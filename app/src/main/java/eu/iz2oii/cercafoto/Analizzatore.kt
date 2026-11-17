@@ -24,8 +24,17 @@ import kotlin.math.sqrt
 /** Tutta l'analisi avviene sul telefono: ML Kit (modelli inclusi nell'APK) + FaceNet TFLite. */
 class Analizzatore(ctx: Context, ocr: Boolean) : Closeable {
 
-    class Volto(val l: Float, val t: Float, val r: Float, val b: Float, val emb: FloatArray?)
-    class Risultato(val etichette: List<Pair<String, Int>>, val volti: List<Volto>, val sorriso: Float, val testo: String)
+    class Volto(val l: Float, val t: Float, val r: Float, val b: Float, val emb: FloatArray?, val attr: Attributi?)
+    class Risultato(
+        val etichette: List<Pair<String, Int>>, val volti: List<Volto>, val sorriso: Float, val testo: String,
+        val colori: Map<String, Int>,
+    ) { var dataExif: Long? = null }
+
+    class Attributi(val eta: Float, val maschio: Float, val capelli: String?, val abiti: String?) {
+        fun valori() = android.content.ContentValues().apply {
+            put("eta", eta); put("maschio", maschio); put("capelli", capelli); put("abiti", abiti)
+        }
+    }
 
     private val labeler = ImageLabeling.getClient(
         ImageLabelerOptions.Builder().setConfidenceThreshold(0.6f).build()
@@ -39,6 +48,23 @@ class Analizzatore(ctx: Context, ocr: Boolean) : Closeable {
     )
     private val testo = if (ocr) TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) else null
     private val facenet = FaceNet(ctx)
+    private val etaSesso = EtaSesso(ctx)
+
+    /** Attributi di un volto dato il riquadro normalizzato 0..1 */
+    fun attributi(bmp: Bitmap, l: Float, t: Float, r: Float, b: Float): Attributi? = runCatching {
+        val W = bmp.width; val H = bmp.height
+        val fw = (r - l) * W; val fh = (b - t) * H
+        if (fw < 24 || fh < 24) return@runCatching null
+        val mx = fw * 0.1f; val my = fh * 0.1f
+        val x0 = max(0, (l * W - mx).toInt()); val y0 = max(0, (t * H - my).toInt())
+        val x1 = min(W, (r * W + mx).toInt()); val y1 = min(H, (b * H + my).toInt())
+        val crop = Bitmap.createBitmap(bmp, x0, y0, x1 - x0, y1 - y0)
+        val (eta, maschio) = etaSesso.stima(crop)
+        crop.recycle()
+        Attributi(eta, maschio, Colori.capelli(bmp, l, t, r, b), Colori.abiti(bmp, l, t, r, b))
+    }.getOrNull()
+
+    fun colori(bmp: Bitmap) = Colori.foto(bmp)
 
     fun analizza(bmp: Bitmap): Risultato {
         val img = InputImage.fromBitmap(bmp, 0)
@@ -58,15 +84,56 @@ class Analizzatore(ctx: Context, ocr: Boolean) : Closeable {
                     facenet.embedding(crop).also { crop.recycle() }
                 }.getOrNull()
             } else null
-            Volto(l / bmp.width.toFloat(), t / bmp.height.toFloat(), r / bmp.width.toFloat(), b / bmp.height.toFloat(), emb)
+            val nl = l / bmp.width.toFloat(); val nt = t / bmp.height.toFloat()
+            val nr = r / bmp.width.toFloat(); val nb = b / bmp.height.toFloat()
+            Volto(nl, nt, nr, nb, emb, attributi(bmp, nl, nt, nr, nb))
         }
         val txt = testo?.let { runCatching { Tasks.await(it.process(img)).text }.getOrDefault("") } ?: ""
-        return Risultato(et, volti, sorriso, txt)
+        return Risultato(et, volti, sorriso, txt, colori(bmp))
     }
 
     override fun close() {
-        labeler.close(); faces.close(); testo?.close(); facenet.close()
+        labeler.close(); faces.close(); testo?.close(); facenet.close(); etaSesso.close()
     }
+}
+
+/** Età e sesso apparenti (modelli MIT di shubham0204, addestrati su UTKFace). Input RGB/255. */
+class EtaSesso(ctx: Context) : Closeable {
+    private val eta = Interpreter(mappa(ctx, "eta.tflite"), Interpreter.Options().setNumThreads(2))
+    private val sesso = Interpreter(mappa(ctx, "sesso.tflite"), Interpreter.Options().setNumThreads(2))
+    private val inEta = ByteBuffer.allocateDirect(200 * 200 * 3 * 4).order(ByteOrder.nativeOrder())
+    private val inSesso = ByteBuffer.allocateDirect(128 * 128 * 3 * 4).order(ByteOrder.nativeOrder())
+
+    private fun riempi(bmp: Bitmap, lato: Int, buf: ByteBuffer) {
+        val s = Bitmap.createScaledBitmap(bmp, lato, lato, true)
+        val px = IntArray(lato * lato)
+        s.getPixels(px, 0, lato, 0, 0, lato, lato)
+        if (s !== bmp) s.recycle()
+        buf.rewind()
+        for (p in px) {
+            buf.putFloat(((p shr 16) and 255) / 255f); buf.putFloat(((p shr 8) and 255) / 255f); buf.putFloat((p and 255) / 255f)
+        }
+        buf.rewind()
+    }
+
+    /** ritorna (età in anni, probabilità maschio 0..1) */
+    fun stima(volto: Bitmap): Pair<Float, Float> {
+        riempi(volto, 200, inEta)
+        val oe = Array(1) { FloatArray(1) }
+        eta.run(inEta, oe)
+        riempi(volto, 128, inSesso)
+        val os = Array(1) { FloatArray(2) }
+        sesso.run(inSesso, os)
+        val tot = os[0][0] + os[0][1]
+        return (oe[0][0] * 116f) to (if (tot > 0f) os[0][0] / tot else 0.5f)
+    }
+
+    override fun close() { eta.close(); sesso.close() }
+}
+
+fun mappa(ctx: Context, nome: String): java.nio.MappedByteBuffer {
+    val fd = ctx.assets.openFd(nome)
+    return FileInputStream(fd.fileDescriptor).channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
 }
 
 /** FaceNet 512 (Apache 2.0, vedi NOTICE). Input 160x160 RGB standardizzato, output vettore 512. */

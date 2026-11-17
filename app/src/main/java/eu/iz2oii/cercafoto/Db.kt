@@ -11,6 +11,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /** Foto indicizzata, in forma leggera per la ricerca in memoria. */
+/** Attributi stimati di un volto (età, sesso apparente, colore capelli e abiti) */
+data class VoltoAttr(val persona: Long, val eta: Float, val maschio: Float, val capelli: String?, val abiti: String?)
+
 data class FotoIdx(
     val id: Long,
     val data: Long,
@@ -22,8 +25,14 @@ data class FotoIdx(
     val testo: String,          // testo letto, normalizzato (minuscolo, senza accenti)
     val testoOriginale: String,
     val persone: Set<Long>,
+    val colori: Map<String, Int> = emptyMap(),
+    val attr: List<VoltoAttr> = emptyList(),
+    val uri: Uri = uriFoto(id),
+    val cartella: String? = null,   // null = galleria di Android, altrimenti URI della cartella esterna
+    val manuali: List<String> = emptyList(),   // etichette aggiunte a mano (testo libero)
+    val rimosse: Set<String> = emptySet(),     // etichette automatiche tolte a mano (nomi EN)
 ) {
-    val uri: Uri get() = uriFoto(id)
+    val testoManuali: String = Testo.normalizza(manuali.joinToString(" "))
 }
 
 data class Persona(
@@ -34,6 +43,7 @@ data class Persona(
     val coverVolto: Long,
     val coverFoto: Long,
     val l: Float, val t: Float, val r: Float, val b: Float,
+    val coverUri: Uri,
 )
 
 fun uriFoto(id: Long): Uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
@@ -49,7 +59,7 @@ fun ByteArray.toFloats(): FloatArray {
     return FloatArray(size / 4) { bb.getFloat() }
 }
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 1) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 2) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -57,6 +67,19 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             inst ?: Db(ctx.applicationContext).also { inst = it }
         }
         const val ESCLUSO = -2L
+        const val VERSIONE = 2
+
+        fun uriDi(id: Long, s: String?): Uri = if (s.isNullOrEmpty()) uriFoto(id) else Uri.parse(s)
+
+        fun codificaColori(m: Map<String, Int>) = m.entries.joinToString(";") { "${it.key}:${it.value}" }
+        fun decodifica(s: String?): Map<String, Int> {
+            val m = HashMap<String, Int>()
+            s?.split(';')?.forEach { x ->
+                val i = x.lastIndexOf(':')
+                if (i > 0) m[x.substring(0, i)] = x.substring(i + 1).toIntOrNull() ?: 0
+            }
+            return m
+        }
     }
 
     override fun onConfigure(db: SQLiteDatabase) { db.enableWriteAheadLogging() }
@@ -67,9 +90,64 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         db.execSQL("CREATE INDEX volto_foto ON volto(foto_id)")
         db.execSQL("CREATE INDEX volto_persona ON volto(persona_id)")
         db.execSQL("CREATE TABLE persona(id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, copertina INTEGER, foto INTEGER DEFAULT 0, nascosta INTEGER DEFAULT 0)")
+        onUpgrade(db, 1, 2)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {
+        if (o < 2) {
+            db.execSQL("ALTER TABLE foto ADD COLUMN colori TEXT")
+            db.execSQL("ALTER TABLE foto ADD COLUMN versione INTEGER DEFAULT 1")
+            db.execSQL("ALTER TABLE volto ADD COLUMN eta REAL")
+            db.execSQL("ALTER TABLE volto ADD COLUMN maschio REAL")
+            db.execSQL("ALTER TABLE volto ADD COLUMN capelli TEXT")
+            db.execSQL("ALTER TABLE volto ADD COLUMN abiti TEXT")
+            db.execSQL("ALTER TABLE foto ADD COLUMN uri TEXT")
+            db.execSQL("ALTER TABLE foto ADD COLUMN cartella TEXT")
+            db.execSQL("ALTER TABLE foto ADD COLUMN manuali TEXT")
+            db.execSQL("ALTER TABLE foto ADD COLUMN rimosse TEXT")
+        }
+    }
+
+    /** Foto analizzate con una versione precedente: mancano colori e attributi dei volti */
+    fun daCompletare(): List<Pair<Long, Uri>> {
+        val out = ArrayList<Pair<Long, Uri>>()
+        readableDatabase.rawQuery("SELECT id, uri FROM foto WHERE versione < $VERSIONE ORDER BY data DESC", null).use { c ->
+            while (c.moveToNext()) out += c.getLong(0) to uriDi(c.getLong(0), c.getString(1))
+        }
+        return out
+    }
+
+    /** id -> cartella (solo foto di cartelle esterne) */
+    fun fotoEsterne(): HashMap<Long, String> {
+        val m = HashMap<Long, String>()
+        readableDatabase.rawQuery("SELECT id, cartella FROM foto WHERE cartella IS NOT NULL", null).use { c ->
+            while (c.moveToNext()) m[c.getLong(0)] = c.getString(1)
+        }
+        return m
+    }
+
+    class Box(val id: Long, val l: Float, val t: Float, val r: Float, val b: Float)
+
+    fun voltiDi(fotoId: Long): List<Box> {
+        val out = ArrayList<Box>()
+        readableDatabase.rawQuery("SELECT id, l, t, r, b FROM volto WHERE foto_id = ?", arrayOf(fotoId.toString())).use { c ->
+            while (c.moveToNext()) out += Box(c.getLong(0), c.getFloat(1), c.getFloat(2), c.getFloat(3), c.getFloat(4))
+        }
+        return out
+    }
+
+    fun completa(fotoId: Long, colori: Map<String, Int>?, attr: List<Pair<Long, Analizzatore.Attributi>>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.update("foto", ContentValues().apply {
+                put("colori", colori?.let { codificaColori(it) } ?: "")
+                put("versione", VERSIONE)
+            }, "id=?", arrayOf(fotoId.toString()))
+            for ((id, a) in attr) db.update("volto", a.valori(), "id=?", arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
 
     /** id -> data modifica, per sapere cosa è già indicizzato */
     fun modifiche(): HashMap<Long, Long> {
@@ -98,13 +176,21 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         db.beginTransaction()
         try {
             db.delete("volto", "foto_id=?", arrayOf(m.id.toString()))
+            var manuali: String? = null; var rimosse: String? = null
+            db.rawQuery("SELECT manuali, rimosse FROM foto WHERE id = ?", arrayOf(m.id.toString())).use { c ->
+                if (c.moveToFirst()) { manuali = c.getString(0); rimosse = c.getString(1) }
+            }
             val cv = ContentValues().apply {
-                put("id", m.id); put("data", m.data); put("modificata", m.modificata)
+                put("manuali", manuali); put("rimosse", rimosse)
+                put("id", m.id); put("data", r?.dataExif ?: m.data); put("modificata", m.modificata)
+                put("uri", m.uri?.toString()); put("cartella", m.cartella)
                 put("nome", m.nome); put("album", m.album)
                 put("etichette", r?.etichette?.joinToString(";") { "${it.first}:${it.second}" } ?: "")
                 put("volti", r?.volti?.size ?: 0)
                 put("sorriso", r?.sorriso ?: 0f)
                 put("testo", r?.testo ?: "")
+                put("colori", r?.colori?.let { codificaColori(it) } ?: "")
+                put("versione", VERSIONE)
             }
             db.insertWithOnConflict("foto", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
             r?.volti?.forEach { v ->
@@ -112,6 +198,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
                     put("foto_id", m.id); put("l", v.l); put("t", v.t); put("r", v.r); put("b", v.b)
                     put("area", (v.r - v.l) * (v.b - v.t))
                     if (v.emb != null) put("emb", v.emb.toBlob())
+                    v.attr?.let { putAll(it.valori()) }
                 })
             }
             db.setTransactionSuccessful()
@@ -121,23 +208,33 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
     fun caricaFoto(): List<FotoIdx> {
         val db = readableDatabase
         val pers = HashMap<Long, MutableSet<Long>>()
-        db.rawQuery("SELECT foto_id, persona_id FROM volto WHERE persona_id > 0", null).use { c ->
-            while (c.moveToNext()) pers.getOrPut(c.getLong(0)) { mutableSetOf() }.add(c.getLong(1))
+        val attr = HashMap<Long, MutableList<VoltoAttr>>()
+        db.rawQuery("SELECT foto_id, persona_id, eta, maschio, capelli, abiti FROM volto", null).use { c ->
+            while (c.moveToNext()) {
+                val f = c.getLong(0); val p = c.getLong(1)
+                if (p > 0) pers.getOrPut(f) { mutableSetOf() }.add(p)
+                if (!c.isNull(2)) attr.getOrPut(f) { mutableListOf() }.add(
+                    VoltoAttr(p, c.getFloat(2), c.getFloat(3), c.getString(4), c.getString(5))
+                )
+            }
         }
         val out = ArrayList<FotoIdx>()
-        db.rawQuery("SELECT id, data, nome, album, etichette, volti, sorriso, testo FROM foto ORDER BY data DESC", null).use { c ->
+        db.rawQuery("SELECT id, data, nome, album, etichette, volti, sorriso, testo, colori, uri, cartella, manuali, rimosse FROM foto ORDER BY data DESC", null).use { c ->
             while (c.moveToNext()) {
-                val et = HashMap<String, Int>()
-                c.getString(4)?.split(';')?.forEach { s ->
-                    val i = s.lastIndexOf(':')
-                    if (i > 0) et[s.substring(0, i)] = s.substring(i + 1).toIntOrNull() ?: 0
-                }
+                val rimosse = c.getString(12)?.split(';')?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+                val et = decodifica(c.getString(4)).filterKeys { it !in rimosse }
                 val testo = c.getString(7) ?: ""
                 out += FotoIdx(
                     id = c.getLong(0), data = c.getLong(1), nome = c.getString(2) ?: "",
                     album = c.getString(3) ?: "", etichette = et, volti = c.getInt(5),
                     sorriso = c.getFloat(6), testo = Testo.normalizza(testo), testoOriginale = testo,
                     persone = pers[c.getLong(0)] ?: emptySet(),
+                    colori = decodifica(c.getString(8)),
+                    attr = attr[c.getLong(0)] ?: emptyList(),
+                    uri = uriDi(c.getLong(0), c.getString(9)),
+                    cartella = c.getString(10),
+                    manuali = c.getString(11)?.split(';')?.filter { it.isNotBlank() } ?: emptyList(),
+                    rimosse = rimosse,
                 )
             }
         }
@@ -147,12 +244,13 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
     fun caricaPersone(): List<Persona> {
         val out = ArrayList<Persona>()
         readableDatabase.rawQuery(
-            "SELECT p.id, p.nome, p.foto, p.nascosta, v.id, v.foto_id, v.l, v.t, v.r, v.b FROM persona p LEFT JOIN volto v ON v.id = p.copertina ORDER BY (p.nome IS NULL OR p.nome = ''), p.foto DESC",
+            "SELECT p.id, p.nome, p.foto, p.nascosta, v.id, v.foto_id, v.l, v.t, v.r, v.b, f.uri FROM persona p LEFT JOIN volto v ON v.id = p.copertina LEFT JOIN foto f ON f.id = v.foto_id ORDER BY (p.nome IS NULL OR p.nome = ''), p.foto DESC",
             null
         ).use { c ->
             while (c.moveToNext()) out += Persona(
                 c.getLong(0), c.getString(1)?.takeIf { it.isNotBlank() }, c.getInt(2), c.getInt(3) == 1,
-                c.getLong(4), c.getLong(5), c.getFloat(6), c.getFloat(7), c.getFloat(8), c.getFloat(9)
+                c.getLong(4), c.getLong(5), c.getFloat(6), c.getFloat(7), c.getFloat(8), c.getFloat(9),
+                uriDi(c.getLong(5), c.getString(10))
             )
         }
         return out
@@ -210,6 +308,14 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         db.execSQL("UPDATE persona SET foto = (SELECT COUNT(DISTINCT foto_id) FROM volto WHERE persona_id = persona.id)")
         db.execSQL("UPDATE persona SET copertina = (SELECT id FROM volto WHERE persona_id = persona.id ORDER BY area DESC LIMIT 1) WHERE copertina IS NULL OR copertina NOT IN (SELECT id FROM volto WHERE persona_id = persona.id)")
         db.execSQL("DELETE FROM persona WHERE foto = 0")
+    }
+
+    /** Salva le correzioni manuali delle etichette di una foto */
+    fun etichetteManuali(fotoId: Long, manuali: List<String>, rimosse: Set<String>) {
+        writableDatabase.update("foto", ContentValues().apply {
+            put("manuali", manuali.map { it.replace(";", ",").trim() }.filter { it.isNotEmpty() }.distinct().joinToString(";"))
+            put("rimosse", rimosse.joinToString(";"))
+        }, "id=?", arrayOf(fotoId.toString()))
     }
 
     fun azzera() {

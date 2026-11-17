@@ -6,3 +6,7 @@ Modello app/src/main/assets/facenet_512.tflite:
   Modello originale: David Sandberg, facenet (MIT).
 
 Google ML Kit (image labeling, face detection, text recognition) — modelli inclusi nell'APK, esecuzione sul dispositivo.
+
+Modelli app/src/main/assets/eta.tflite e sesso.tflite:
+  stima di età e sesso apparenti, dal progetto shubham0204/Age-Gender_Estimation_TF-Android — MIT License
+  (Copyright (c) 2021 Shubham Panchal), addestrati su UTKFace.

@@ -50,7 +50,8 @@ class AppVM(app: Application) : AndroidViewModel(app) {
                 val prima = avanzamento.value
                 avanzamento.value = Avanzamento(attivo, fase, fatte, tot)
                 // aggiorna i risultati man mano e alla fine
-                if ((prima.attivo && !attivo) || fatte - ultimoRicarico >= 100 || (fase == "volti" && prima.fase != "volti")) {
+                if (fase != prima.fase) ultimoRicarico = 0
+                if ((prima.attivo && !attivo) || fatte - ultimoRicarico >= 100 || (fase != prima.fase && prima.fase.isNotEmpty())) {
                     ultimoRicarico = fatte
                     ricarica()
                 }
@@ -77,6 +78,25 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     fun nascondi(id: Long, s: Boolean) = op { db.nascondi(id, s) }
     fun unisci(dest: Long, src: Long) = op { db.unisci(dest, src) }
     fun escludi(fotoId: Long, personaId: Long) = op { db.escludi(fotoId, personaId) }
+    fun salvaEtichette(fotoId: Long, manuali: List<String>, rimosse: Set<String>) = op { db.etichetteManuali(fotoId, manuali, rimosse) }
+
+    val cartelle = MutableStateFlow(Impostazioni.cartelle(app))
+
+    fun aggiungiCartella(uri: android.net.Uri) {
+        val ctx = getApplication<Application>()
+        runCatching { ctx.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        val nuove = Impostazioni.cartelle(ctx) + uri.toString()
+        Impostazioni.setCartelle(ctx, nuove); cartelle.value = nuove
+        Indicizzatore.avvia(ctx, sostituisci = true)
+    }
+
+    fun rimuoviCartella(tree: String) {
+        val ctx = getApplication<Application>()
+        val nuove = Impostazioni.cartelle(ctx) - tree
+        Impostazioni.setCartelle(ctx, nuove); cartelle.value = nuove
+        runCatching { ctx.contentResolver.releasePersistableUriPermission(android.net.Uri.parse(tree), android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        op { db.rimuovi(db.fotoEsterne().filterValues { it == tree }.keys) }
+    }
 
     fun ricalcolaGruppi() {
         if (ricalcolo.value) return
