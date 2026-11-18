@@ -90,6 +90,7 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
     var selezione by remember { mutableStateOf(setOf<Long>()) }
     var pannelloFiltri by remember { mutableStateOf(false) }
     var azione by remember { mutableStateOf<TipoOp?>(null) }
+    var aggiungiPersona by remember { mutableStateOf(false) }
     val selezionate = remember(selezione, ris) { ris.filter { it.id in selezione } }
     if (selezione.isNotEmpty()) androidx.activity.compose.BackHandler { selezione = emptySet() }
 
@@ -109,6 +110,7 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
                         DropdownMenuItem({ Text("Copia in…") }, { menu = false; azione = TipoOp.COPIA })
                         DropdownMenuItem({ Text("Sposta in…") }, { menu = false; azione = TipoOp.SPOSTA })
                         DropdownMenuItem({ Text("Elimina…") }, { menu = false; azione = TipoOp.ELIMINA })
+                        DropdownMenuItem({ Text("Aggiungi a una persona…") }, { menu = false; aggiungiPersona = true })
                     }
                 }
             }
@@ -178,6 +180,7 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
     }
 
     if (pannelloFiltri) PannelloFiltri(vm, filtri, { vm.filtri.value = it }) { pannelloFiltri = false }
+    if (aggiungiPersona) DialogoAggiungiPersona(vm, selezionate, { aggiungiPersona = false }) { selezione = emptySet() }
     azione?.let { t ->
         DialogoAzione(vm, t, selezionate, chiudi = { azione = null }) { selezione = emptySet() }
     }
@@ -369,6 +372,7 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
     var dettagli by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var volti by remember { mutableStateOf<List<VoltoInfo>>(emptyList()) }
     var voltoScelto by remember { mutableStateOf<VoltoInfo?>(null) }
+    var aggiungiPersona by remember { mutableStateOf(false) }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         HorizontalPager(stato, Modifier.fillMaxSize(), key = { lista[it].id }) { p ->
             AsyncImage(
@@ -382,7 +386,7 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
         LaunchedEffect(f.id, f.album, info) {
             if (info) dettagli = withContext(Dispatchers.IO) { runCatching { Operazioni.dettagli(ctx, f) }.getOrDefault(emptyList()) }
         }
-        LaunchedEffect(f.id, f.persone, info) { if (info && f.volti > 0) volti = vm.voltiFoto(f.id) else volti = emptyList() }
+        LaunchedEffect(f.id, f.persone, info) { volti = if (info) vm.voltiFoto(f.id) else emptyList() }
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(chiudi) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Indietro", tint = Color.White) }
             Text("${stato.currentPage + 1} / ${lista.size}", color = Color.White, modifier = Modifier.weight(1f))
@@ -396,6 +400,7 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
                     DropdownMenuItem({ Text("Sposta in…") }, { menu = false; azione = TipoOp.SPOSTA })
                     DropdownMenuItem({ Text("Elimina…") }, { menu = false; azione = TipoOp.ELIMINA })
                     DropdownMenuItem({ Text("Modifica etichette") }, { menu = false; modifica = true })
+                    DropdownMenuItem({ Text("Aggiungi a una persona…") }, { menu = false; aggiungiPersona = true })
                     DropdownMenuItem({ Text("Altre foto di questa cartella") }, {
                         menu = false; vm.query.value = ""; vm.filtri.value = Filtri(album = f.album); chiudi()
                     })
@@ -414,7 +419,7 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
                 if (f.volti > 0) Text("Volti: ${f.volti}" + if (nomi.isNotEmpty()) " — ${nomi.joinToString(", ")}" else "", color = Color.White)
                 for (a in f.attr) Text("• " + descriviVolto(a, persone), color = Color.White, style = MaterialTheme.typography.bodySmall)
                 if (volti.isNotEmpty()) {
-                    Text("Tocca un volto per vedere o cambiare il gruppo:", color = Color.LightGray, style = MaterialTheme.typography.bodySmall,
+                    Text("Tocca un volto per vedere o cambiare il gruppo (✋ = aggiunta a mano):", color = Color.LightGray, style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(top = 6.dp))
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 4.dp)) {
                         items(volti, key = { it.id }) { v ->
@@ -422,7 +427,7 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
                             Column(Modifier.width(72.dp).clickable { voltoScelto = v }, horizontalAlignment = Alignment.CenterHorizontally) {
                                 VoltoMini(v.id, f.uri, v.l, v.t, v.r, v.b, 56.dp)
                                 Text(
-                                    pers?.nome ?: if (pers != null) "senza nome" else "nessun gruppo",
+                                    (if (v.manuale) "✋ " else "") + (pers?.nome ?: if (pers != null) "senza nome" else "nessun gruppo"),
                                     color = if (pers?.nome != null) Color.White else Color.LightGray, maxLines = 1,
                                     overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall
                                 )
@@ -454,6 +459,9 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
                 }
             }
         }
+    }
+    if (aggiungiPersona) lista.getOrNull(stato.currentPage)?.let { x ->
+        DialogoAggiungiPersona(vm, listOf(x), { aggiungiPersona = false }) {}
     }
     voltoScelto?.let { v ->
         val f = lista.getOrNull(stato.currentPage)
@@ -502,7 +510,11 @@ fun DialogoVolto(vm: AppVM, v: VoltoInfo, uri: Uri, persone: List<Persona>, chiu
                 }
             },
             text = {
-                Column {
+                if (v.manuale) Column {
+                    Text("Foto collegata a mano a questa persona.", style = MaterialTheme.typography.bodySmall)
+                    if (attuale != null) TextButton({ apriPersona(attuale.id) }) { Text("Apri il gruppo") }
+                    TextButton({ vm.rimuoviAssociazione(v.id); chiudi() }) { Text("Togli da questa persona", color = MaterialTheme.colorScheme.error) }
+                } else Column {
                     if (!v.conVettore) Text("Volto troppo piccolo per il riconoscimento automatico, ma puoi assegnarlo a mano.",
                         style = MaterialTheme.typography.bodySmall)
                     if (attuale != null) TextButton({ apriPersona(attuale.id) }) { Text("Apri il gruppo") }
@@ -516,6 +528,32 @@ fun DialogoVolto(vm: AppVM, v: VoltoInfo, uri: Uri, persone: List<Persona>, chiu
             confirmButton = {},
             dismissButton = { TextButton(chiudi) { Text("Chiudi") } },
         )
+    }
+}
+
+/** Collega a mano una o più foto a una persona con nome, anche se il volto non si vede */
+@Composable
+fun DialogoAggiungiPersona(vm: AppVM, lista: List<FotoIdx>, chiudi: () -> Unit, fatto: () -> Unit) {
+    val persone by vm.persone.collectAsStateWithLifecycle()
+    var nuovoNome by remember { mutableStateOf<String?>(null) }
+    val n = if (lista.size == 1) "questa foto" else "${lista.size} foto"
+    if (nuovoNome != null) {
+        AlertDialog(
+            onDismissRequest = chiudi,
+            title = { Text("Nuova persona") },
+            text = { OutlinedTextField(nuovoNome!!, { nuovoNome = it }, singleLine = true, placeholder = { Text("Nome") }) },
+            confirmButton = {
+                TextButton({ if (nuovoNome!!.isNotBlank()) { vm.nuovaPersonaConFoto(lista, nuovoNome!!); chiudi(); fatto() } }) { Text("Crea") }
+            },
+            dismissButton = { TextButton(chiudi) { Text("Annulla") } },
+        )
+    } else {
+        DialogoScegliPersona("Aggiungi $n a…", persone.filter { it.nome != null }, null, emptyMap(), chiudi,
+            extra = {
+                Text("Anche se il volto non si vede: la foto comparirà nel gruppo e nelle ricerche per nome.",
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+                TextButton({ nuovoNome = "" }) { Text("+ Nuova persona") }
+            }) { p -> vm.associa(lista, p); chiudi(); fatto() }
     }
 }
 

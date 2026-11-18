@@ -102,6 +102,17 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun associa(lista: List<FotoIdx>, p: Persona) = op {
+        val n = db.associa(lista.map { it.id }, p.id)
+        messaggio.value = if (n == 0) "Già presenti in «${p.nome}»" else "Aggiunte ${foto(n)} a «${p.nome}»"
+    }
+
+    fun nuovaPersonaConFoto(lista: List<FotoIdx>, nome: String) = op {
+        db.nuovaPersonaConFoto(lista.map { it.id }, nome); messaggio.value = "Creata la persona «${nome.trim()}» con ${foto(lista.size)}"
+    }
+
+    fun rimuoviAssociazione(voltoId: Long) = op { db.rimuoviVolto(voltoId); messaggio.value = "Foto tolta dalla persona" }
+
     fun nuovaPersonaDaVolto(voltoId: Long, nome: String) = op {
         db.nuovaPersonaDaVolto(voltoId, nome); messaggio.value = "Creata la persona «${nome.trim()}»"
     }

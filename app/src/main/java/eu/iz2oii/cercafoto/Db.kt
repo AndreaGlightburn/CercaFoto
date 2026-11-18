@@ -52,7 +52,7 @@ data class Persona(
 )
 
 /** Un volto di una foto, per il visore */
-data class VoltoInfo(val id: Long, val persona: Long, val l: Float, val t: Float, val r: Float, val b: Float, val conVettore: Boolean)
+data class VoltoInfo(val id: Long, val persona: Long, val l: Float, val t: Float, val r: Float, val b: Float, val conVettore: Boolean, val manuale: Boolean = false)
 
 fun uriFoto(id: Long): Uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
 
@@ -67,7 +67,7 @@ fun ByteArray.toFloats(): FloatArray {
     return FloatArray(size / 4) { bb.getFloat() }
 }
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 2) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 3) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -98,7 +98,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         db.execSQL("CREATE INDEX volto_foto ON volto(foto_id)")
         db.execSQL("CREATE INDEX volto_persona ON volto(persona_id)")
         db.execSQL("CREATE TABLE persona(id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, copertina INTEGER, foto INTEGER DEFAULT 0, nascosta INTEGER DEFAULT 0)")
-        onUpgrade(db, 1, 2)
+        onUpgrade(db, 1, 3)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {
@@ -113,6 +113,10 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             db.execSQL("ALTER TABLE foto ADD COLUMN cartella TEXT")
             db.execSQL("ALTER TABLE foto ADD COLUMN manuali TEXT")
             db.execSQL("ALTER TABLE foto ADD COLUMN rimosse TEXT")
+        }
+        if (o < 3) {
+            // associazioni foto-persona fatte a mano, senza volto visibile
+            db.execSQL("ALTER TABLE volto ADD COLUMN manuale INTEGER DEFAULT 0")
         }
     }
 
@@ -183,7 +187,12 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         val db = writableDatabase
         db.beginTransaction()
         try {
+            val associate = ArrayList<Long>()
+            db.rawQuery("SELECT persona_id FROM volto WHERE foto_id = ? AND manuale = 1", arrayOf(m.id.toString())).use { c ->
+                while (c.moveToNext()) associate += c.getLong(0)
+            }
             db.delete("volto", "foto_id=?", arrayOf(m.id.toString()))
+            for (p in associate) inserisciManuale(db, m.id, p)
             var manuali: String? = null; var rimosse: String? = null
             db.rawQuery("SELECT manuali, rimosse FROM foto WHERE id = ?", arrayOf(m.id.toString())).use { c ->
                 if (c.moveToFirst()) { manuali = c.getString(0); rimosse = c.getString(1) }
@@ -278,7 +287,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
     fun fotoConVoltiSenzaNome(): List<Pair<Long, Uri>> {
         val out = ArrayList<Pair<Long, Uri>>()
         readableDatabase.rawQuery(
-            "SELECT DISTINCT f.id, f.uri FROM volto v JOIN foto f ON f.id = v.foto_id WHERE v.persona_id <> $ESCLUSO AND " +
+            "SELECT DISTINCT f.id, f.uri FROM volto v JOIN foto f ON f.id = v.foto_id WHERE v.manuale = 0 AND v.persona_id <> $ESCLUSO AND " +
                 "v.persona_id NOT IN (SELECT id FROM persona WHERE nome IS NOT NULL AND nome <> '') ORDER BY f.data DESC", null
         ).use { c -> while (c.moveToNext()) out += c.getLong(0) to uriDi(c.getLong(0), c.getString(1)) }
         return out
@@ -295,7 +304,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             class Vecchio(val l: Float, val t: Float, val r: Float, val b: Float, val p: Long)
             val tenere = ArrayList<Vecchio>()
             db.rawQuery(
-                "SELECT l, t, r, b, persona_id FROM volto WHERE foto_id = ? AND (persona_id = $ESCLUSO OR persona_id IN " +
+                "SELECT l, t, r, b, persona_id FROM volto WHERE foto_id = ? AND manuale = 0 AND (persona_id = $ESCLUSO OR persona_id IN " +
                     "(SELECT id FROM persona WHERE nome IS NOT NULL AND nome <> ''))", arrayOf(fotoId.toString())
             ).use { c -> while (c.moveToNext()) tenere += Vecchio(c.getFloat(0), c.getFloat(1), c.getFloat(2), c.getFloat(3), c.getLong(4)) }
             fun iou(a: Vecchio, v: Analizzatore.Volto): Float {
@@ -304,7 +313,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
                 val uni = (a.r - a.l) * (a.b - a.t) + (v.r - v.l) * (v.b - v.t) - inter
                 return if (uni > 0f) inter / uni else 0f
             }
-            db.delete("volto", "foto_id=?", arrayOf(fotoId.toString()))
+            db.delete("volto", "foto_id=? AND manuale = 0", arrayOf(fotoId.toString()))
             val usati = HashSet<Vecchio>()
             for (v in volti) {
                 val match = tenere.filter { it !in usati }.maxByOrNull { iou(it, v) }?.takeIf { iou(it, v) >= 0.35f }
@@ -331,8 +340,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
 
     fun voltiFoto(fotoId: Long): List<VoltoInfo> {
         val out = ArrayList<VoltoInfo>()
-        readableDatabase.rawQuery("SELECT id, persona_id, l, t, r, b, emb IS NOT NULL FROM volto WHERE foto_id = ? ORDER BY l", arrayOf(fotoId.toString())).use { c ->
-            while (c.moveToNext()) out += VoltoInfo(c.getLong(0), c.getLong(1), c.getFloat(2), c.getFloat(3), c.getFloat(4), c.getFloat(5), c.getInt(6) == 1)
+        readableDatabase.rawQuery("SELECT id, persona_id, l, t, r, b, emb IS NOT NULL, manuale FROM volto WHERE foto_id = ? ORDER BY manuale, l", arrayOf(fotoId.toString())).use { c ->
+            while (c.moveToNext()) out += VoltoInfo(c.getLong(0), c.getLong(1), c.getFloat(2), c.getFloat(3), c.getFloat(4), c.getFloat(5), c.getInt(6) == 1, c.getInt(7) == 1)
         }
         return out
     }
@@ -412,7 +421,48 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         val db = writableDatabase
         db.beginTransaction()
         try {
+            db.delete("volto", "foto_id = ? AND persona_id = ? AND manuale = 1", arrayOf(fotoId.toString(), personaId.toString()))
             db.execSQL("UPDATE volto SET persona_id = ? WHERE foto_id = ? AND persona_id = ?", arrayOf(ESCLUSO, fotoId, personaId))
+            ricontaInterno(db)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    private fun inserisciManuale(db: SQLiteDatabase, fotoId: Long, personaId: Long) {
+        db.insert("volto", null, ContentValues().apply {
+            put("foto_id", fotoId); put("l", 0.05f); put("t", 0.05f); put("r", 0.95f); put("b", 0.95f)
+            put("area", 0f); put("persona_id", personaId); put("manuale", 1)
+        })
+    }
+
+    /** Collega a mano delle foto a una persona (anche senza volto visibile). Ritorna quante sono state aggiunte. */
+    fun associa(fotoIds: List<Long>, personaId: Long): Int {
+        val db = writableDatabase
+        var n = 0
+        db.beginTransaction()
+        try {
+            for (f in fotoIds) {
+                val gia = db.rawQuery("SELECT 1 FROM volto WHERE foto_id = ? AND persona_id = ? LIMIT 1",
+                    arrayOf(f.toString(), personaId.toString())).use { it.moveToFirst() }
+                if (!gia) { inserisciManuale(db, f, personaId); n++ }
+            }
+            ricontaInterno(db)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        return n
+    }
+
+    fun nuovaPersonaConFoto(fotoIds: List<Long>, nome: String): Long {
+        val id = writableDatabase.insert("persona", null, ContentValues().apply { put("nome", nome.trim()) })
+        associa(fotoIds, id)
+        return id
+    }
+
+    fun rimuoviVolto(voltoId: Long) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("volto", "id=?", arrayOf(voltoId.toString()))
             ricontaInterno(db)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -420,7 +470,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
 
     fun ricontaInterno(db: SQLiteDatabase) {
         db.execSQL("UPDATE persona SET foto = (SELECT COUNT(DISTINCT foto_id) FROM volto WHERE persona_id = persona.id)")
-        db.execSQL("UPDATE persona SET copertina = (SELECT id FROM volto WHERE persona_id = persona.id ORDER BY area DESC LIMIT 1) WHERE copertina IS NULL OR copertina NOT IN (SELECT id FROM volto WHERE persona_id = persona.id)")
+        db.execSQL("UPDATE persona SET copertina = (SELECT id FROM volto WHERE persona_id = persona.id ORDER BY manuale, area DESC LIMIT 1) WHERE copertina IS NULL OR copertina NOT IN (SELECT id FROM volto WHERE persona_id = persona.id)")
         db.execSQL("DELETE FROM persona WHERE foto = 0")
     }
 
