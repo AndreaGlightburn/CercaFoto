@@ -3,6 +3,7 @@ package eu.iz2oii.cercafoto
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.util.LruCache
 import android.util.Size
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -30,7 +31,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
@@ -71,31 +75,73 @@ private val SUGGERIMENTI = listOf(
 
 // ---------------------------------------------------------------- CERCA
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () -> Unit) {
+    val ctx = LocalContext.current
     val q by vm.query.collectAsStateWithLifecycle()
     val ris by vm.risultati.collectAsStateWithLifecycle()
     val foto by vm.foto.collectAsStateWithLifecycle()
     val persone by vm.persone.collectAsStateWithLifecycle()
     val av by vm.avanzamento.collectAsStateWithLifecycle()
     val caricato by vm.caricato.collectAsStateWithLifecycle()
+    val filtri by vm.filtri.collectAsStateWithLifecycle()
     val focus = LocalFocusManager.current
+    var selezione by remember { mutableStateOf(setOf<Long>()) }
+    var pannelloFiltri by remember { mutableStateOf(false) }
+    var azione by remember { mutableStateOf<TipoOp?>(null) }
+    val selezionate = remember(selezione, ris) { ris.filter { it.id in selezione } }
+    if (selezione.isNotEmpty()) androidx.activity.compose.BackHandler { selezione = emptySet() }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        OutlinedTextField(
-            value = q, onValueChange = { vm.query.value = it },
-            modifier = Modifier.fillMaxWidth().padding(12.dp, 8.dp),
-            placeholder = { Text("cane al mare, Mario, 2024, scontrino…") },
-            leadingIcon = { Icon(Icons.Default.Search, null) },
-            trailingIcon = { if (q.isNotEmpty()) IconButton({ vm.query.value = "" }) { Icon(Icons.Default.Close, "Cancella") } },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
-        )
-        val nomi = persone.filter { it.nome != null && !it.nascosta }.map { it.nome!! }
-        LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(nomi + SUGGERIMENTI) { s ->
-                SuggestionChip(onClick = { vm.query.value = s; focus.clearFocus() }, label = { Text(s) })
+        if (selezione.isNotEmpty()) {
+            // Barra della selezione multipla
+            Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.secondaryContainer).padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                IconButton({ selezione = emptySet() }) { Icon(Icons.Default.Close, "Annulla selezione") }
+                Text("${selezione.size} selezionate", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                TextButton({ selezione = ris.map { it.id }.toSet() }) { Text("Tutte") }
+                IconButton({ condividi(ctx, selezionate) }) { Icon(Icons.Default.Share, "Condividi") }
+                var menu by remember { mutableStateOf(false) }
+                Box {
+                    IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "Altro") }
+                    DropdownMenu(menu, { menu = false }) {
+                        DropdownMenuItem({ Text("Copia in…") }, { menu = false; azione = TipoOp.COPIA })
+                        DropdownMenuItem({ Text("Sposta in…") }, { menu = false; azione = TipoOp.SPOSTA })
+                        DropdownMenuItem({ Text("Elimina…") }, { menu = false; azione = TipoOp.ELIMINA })
+                    }
+                }
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = q, onValueChange = { vm.query.value = it },
+                    modifier = Modifier.weight(1f).padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+                    placeholder = { Text("cane al mare, Mario, 2024…") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = { if (q.isNotEmpty()) IconButton({ vm.query.value = "" }) { Icon(Icons.Default.Close, "Cancella") } },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
+                )
+                BadgedBox(badge = { if (filtri.attivi > 0) Badge { Text("${filtri.attivi}") } }, Modifier.padding(horizontal = 8.dp)) {
+                    IconButton({ pannelloFiltri = true }) { Icon(Icons.AutoMirrored.Filled.List, "Filtri") }
+                }
+            }
+        }
+        if (filtri.attivi > 0) {
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(descriviFiltri(filtri)) { (testo, togli) ->
+                    InputChip(true, { vm.filtri.value = togli(vm.filtri.value) }, label = { Text(testo) },
+                        trailingIcon = { Icon(Icons.Default.Close, "Togli", Modifier.size(16.dp)) })
+                }
+            }
+        } else {
+            val nomi = persone.filter { it.nome != null && !it.nascosta }.map { it.nome!! }
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(nomi + SUGGERIMENTI) { s ->
+                    SuggestionChip(onClick = { vm.query.value = s; focus.clearFocus() }, label = { Text(s) })
+                }
             }
         }
         if (av.attivo && av.totale > 0) {
@@ -116,31 +162,195 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
             }
         } else {
             Text(
-                if (q.isBlank()) "${ris.size} foto indicizzate" else "${ris.size} foto trovate",
+                (if (q.isBlank() && filtri.attivi == 0) "${ris.size} foto indicizzate" else "${ris.size} foto trovate") +
+                    if (selezione.isEmpty() && ris.isNotEmpty()) " · tieni premuto per selezionare" else "",
                 style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(12.dp, 6.dp)
             )
         }
-        GrigliaFoto(ris, onClick = { i -> focus.clearFocus(); apri(ris, i) })
+        GrigliaFoto(
+            ris, selezionate = selezione,
+            onLongClick = { f -> focus.clearFocus(); selezione = if (f.id in selezione) selezione - f.id else selezione + f.id },
+        ) { i ->
+            focus.clearFocus()
+            if (selezione.isNotEmpty()) { val id = ris[i].id; selezione = if (id in selezione) selezione - id else selezione + id }
+            else apri(ris, i)
+        }
     }
+
+    if (pannelloFiltri) PannelloFiltri(vm, filtri, { vm.filtri.value = it }) { pannelloFiltri = false }
+    azione?.let { t ->
+        DialogoAzione(vm, t, selezionate, chiudi = { azione = null }) { selezione = emptySet() }
+    }
+}
+
+fun condividi(ctx: Context, lista: List<FotoIdx>) {
+    if (lista.isEmpty()) return
+    val i = if (lista.size == 1) Intent(Intent.ACTION_SEND).setType("image/*").putExtra(Intent.EXTRA_STREAM, lista[0].uri)
+    else Intent(Intent.ACTION_SEND_MULTIPLE).setType("image/*")
+        .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(lista.map { it.uri }))
+    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    ctx.startActivity(Intent.createChooser(i, "Condividi"))
+}
+
+private val NOMI_ETA = mapOf("bambini" to "Bambini (0-12)", "ragazzi" to "Ragazzi (13-29)", "adulti" to "Adulti (30-59)", "anziani" to "Anziani (60+)")
+private val NOMI_CAPELLI = mapOf("nero" to "Neri", "castano" to "Castani", "biondo" to "Biondi", "rosso" to "Rossi", "grigio" to "Grigi/bianchi")
+private val NOMI_PERSONE = mapOf(0 to "Nessuna persona", 1 to "Una persona", 2 to "Due persone", 3 to "Gruppo (3+)")
+
+fun descriviFiltri(f: Filtri): List<Pair<String, (Filtri) -> Filtri>> = buildList {
+    f.sesso?.let { add((if (it == "donna") "Donna" else "Uomo") to { x: Filtri -> x.copy(sesso = null) }) }
+    f.eta?.let { add((NOMI_ETA[it] ?: it) to { x: Filtri -> x.copy(eta = null) }) }
+    f.capelli?.let { add("Capelli ${NOMI_CAPELLI[it]?.lowercase()}" to { x: Filtri -> x.copy(capelli = null) }) }
+    f.abiti?.let { add("Abiti $it" to { x: Filtri -> x.copy(abiti = null) }) }
+    f.persone?.let { add((NOMI_PERSONE[it] ?: "") to { x: Filtri -> x.copy(persone = null) }) }
+    f.album?.let { add("Cartella: $it" to { x: Filtri -> x.copy(album = null) }) }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun <T> Scelte(titolo: String, opzioni: List<Pair<T, String>>, valore: T?, scegli: (T?) -> Unit) {
+    Text(titolo, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for ((v, nome) in opzioni) FilterChip(valore == v, { scegli(if (valore == v) null else v) }, label = { Text(nome) })
+    }
+}
+
+@Composable
+fun PannelloFiltri(vm: AppVM, iniziali: Filtri, applica: (Filtri) -> Unit, chiudi: () -> Unit) {
+    var f by remember { mutableStateOf(iniziali) }
+    val foto by vm.foto.collectAsStateWithLifecycle()
+    val album = remember(foto) { foto.groupingBy { it.album }.eachCount().entries.filter { it.key.isNotBlank() }.sortedByDescending { it.value } }
+    var tutteCartelle by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = chiudi,
+        title = { Text("Filtri") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Età, sesso e capelli sono stime: valgono sulla stessa persona e solo per volti abbastanza grandi.",
+                    style = MaterialTheme.typography.bodySmall)
+                Scelte("Persone nella foto", NOMI_PERSONE.toList(), f.persone) { f = f.copy(persone = it) }
+                Scelte("Sesso", listOf("donna" to "Donna", "uomo" to "Uomo"), f.sesso) { f = f.copy(sesso = it) }
+                Scelte("Età", NOMI_ETA.toList(), f.eta) { f = f.copy(eta = it) }
+                Scelte("Capelli", NOMI_CAPELLI.toList(), f.capelli) { f = f.copy(capelli = it) }
+                Scelte("Colore abiti", Colori.NOMI.map { it to it }, f.abiti) { f = f.copy(abiti = it) }
+                val elenco = if (tutteCartelle) album else album.take(8)
+                Scelte("Cartella", elenco.map { it.key to "${it.key} (${it.value})" }, f.album) { f = f.copy(album = it) }
+                if (album.size > 8) TextButton({ tutteCartelle = !tutteCartelle }) { Text(if (tutteCartelle) "Meno cartelle" else "Tutte le cartelle (${album.size})") }
+            }
+        },
+        confirmButton = { TextButton({ applica(f); chiudi() }) { Text("Applica") } },
+        dismissButton = { TextButton({ applica(Filtri()); chiudi() }) { Text("Azzera") } },
+    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun GrigliaFoto(lista: List<FotoIdx>, modifier: Modifier = Modifier, onLongClick: ((FotoIdx) -> Unit)? = null, onClick: (Int) -> Unit) {
+fun GrigliaFoto(
+    lista: List<FotoIdx>, modifier: Modifier = Modifier, selezionate: Set<Long> = emptySet(),
+    onLongClick: ((FotoIdx) -> Unit)? = null, onClick: (Int) -> Unit,
+) {
     val ctx = LocalContext.current
     LazyVerticalGrid(GridCells.Adaptive(100.dp), modifier.fillMaxSize(), contentPadding = PaddingValues(2.dp)) {
         items(lista.size, key = { lista[it].id }) { i ->
             val f = lista[i]
-            AsyncImage(
-                model = ImageRequest.Builder(ctx).data(f.uri).size(300).build(),
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.aspectRatio(1f).padding(1.dp)
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .combinedClickable(onClick = { onClick(i) }, onLongClick = onLongClick?.let { cb -> { cb(f) } })
-            )
+            val sel = f.id in selezionate
+            Box(Modifier.aspectRatio(1f).padding(1.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .combinedClickable(onClick = { onClick(i) }, onLongClick = onLongClick?.let { cb -> { cb(f) } })) {
+                AsyncImage(
+                    model = ImageRequest.Builder(ctx).data(f.uri).size(300).build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize().padding(if (sel) 10.dp else 0.dp)
+                )
+                if (sel) Icon(Icons.Default.CheckCircle, "Selezionata", Modifier.align(Alignment.TopStart).padding(4.dp),
+                    tint = MaterialTheme.colorScheme.primary)
+            }
         }
     }
+}
+
+// ---------------------------------------------------------------- COPIA / SPOSTA / ELIMINA
+
+@Composable
+fun DialogoAzione(vm: AppVM, tipo: TipoOp, lista: List<FotoIdx>, chiudi: () -> Unit, fatto: () -> Unit) {
+    val n = if (lista.size == 1) "questa foto" else "${lista.size} foto"
+    if (tipo == TipoOp.ELIMINA || tipo == TipoOp.CESTINO) {
+        val esterne = lista.count { it.cartella != null }
+        AlertDialog(
+            onDismissRequest = chiudi,
+            title = { Text("Eliminare $n?") },
+            text = {
+                val nota = if (esterne > 0) "\n\n$esterne foto sono su unità esterne: vengono eliminate subito (lì non c'è cestino)." else ""
+                Text("Il cestino tiene le foto per 30 giorni e si possono recuperare.$nota\n\nAndroid ti chiederà una conferma.")
+            },
+            confirmButton = {
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton({ vm.esegui(TipoOp.CESTINO, lista); chiudi(); fatto() }) { Text("Sposta nel cestino") }
+                    TextButton({ vm.esegui(TipoOp.ELIMINA, lista); chiudi(); fatto() }) {
+                        Text("Elimina definitivamente", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            dismissButton = { TextButton(chiudi) { Text("Annulla") } },
+        )
+    } else {
+        DialogoDestinazione(vm, if (tipo == TipoOp.COPIA) "Copia $n in…" else "Sposta $n in…", chiudi) { d ->
+            vm.esegui(tipo, lista, d); chiudi(); fatto()
+        }
+    }
+}
+
+@Composable
+fun DialogoDestinazione(vm: AppVM, titolo: String, chiudi: () -> Unit, scegli: (Destinazione) -> Unit) {
+    val cartelle by vm.cartelleGalleria.collectAsStateWithLifecycle()
+    val esterne by vm.cartelle.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { vm.caricaCartelleGalleria() }
+    var nuova by remember { mutableStateOf(false) }
+    var nomeNuova by remember { mutableStateOf("") }
+    val selettore = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { u ->
+        if (u != null) {
+            val ctx = vm.getApplication<android.app.Application>()
+            runCatching {
+                ctx.contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            }
+            scegli(Destinazione.Albero(u.toString()))
+        }
+    }
+    AlertDialog(
+        onDismissRequest = chiudi,
+        title = { Text(titolo) },
+        text = {
+            LazyColumn(Modifier.heightIn(max = 460.dp)) {
+                item {
+                    if (nuova) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(nomeNuova, { nomeNuova = it.replace("/", "") }, Modifier.weight(1f), singleLine = true,
+                                label = { Text("Nuova cartella in Pictures") })
+                            TextButton({
+                                if (nomeNuova.isNotBlank()) scegli(Destinazione.Galleria("Pictures/${nomeNuova.trim()}/"))
+                            }) { Text("OK") }
+                        }
+                    } else TextButton({ nuova = true }) { Text("+ Nuova cartella") }
+                    TextButton({ selettore.launch(null) }) { Text("Altra posizione / chiavetta USB…") }
+                    HorizontalDivider()
+                }
+                items(esterne.toList()) { t ->
+                    Text(nomeCartella(t), Modifier.fillMaxWidth().clickable { scegli(Destinazione.Albero(t)) }.padding(10.dp))
+                }
+                items(cartelle, key = { it.volume + it.percorso }) { c ->
+                    Column(Modifier.fillMaxWidth().clickable { scegli(Destinazione.Galleria(c.percorso)) }.padding(10.dp)) {
+                        Text(c.percorso.trimEnd('/').substringAfterLast('/'), fontWeight = FontWeight.Bold)
+                        Text(
+                            (if (c.volume == "external_primary") "" else "Scheda SD · ") + c.percorso.trimEnd('/') + " · ${c.n} foto",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(chiudi) { Text("Annulla") } },
+    )
 }
 
 // ---------------------------------------------------------------- VISORE
@@ -155,6 +365,8 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
     val tutte by vm.foto.collectAsStateWithLifecycle()
     var info by remember { mutableStateOf(false) }
     var modifica by remember { mutableStateOf(false) }
+    var azione by remember { mutableStateOf<TipoOp?>(null) }
+    var dettagli by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         HorizontalPager(stato, Modifier.fillMaxSize(), key = { lista[it].id }) { p ->
             AsyncImage(
@@ -165,23 +377,36 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
         }
         val f0 = lista.getOrNull(stato.currentPage) ?: return@Box
         val f = tutte.firstOrNull { it.id == f0.id } ?: f0
+        LaunchedEffect(f.id, f.album, info) {
+            if (info) dettagli = withContext(Dispatchers.IO) { runCatching { Operazioni.dettagli(ctx, f) }.getOrDefault(emptyList()) }
+        }
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(chiudi) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Indietro", tint = Color.White) }
             Text("${stato.currentPage + 1} / ${lista.size}", color = Color.White, modifier = Modifier.weight(1f))
             IconButton({ info = !info }) { Icon(Icons.Default.Info, "Dettagli", tint = Color.White) }
-            IconButton({
-                val i = Intent(Intent.ACTION_SEND).setType("image/*").putExtra(Intent.EXTRA_STREAM, f.uri)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                ctx.startActivity(Intent.createChooser(i, "Condividi"))
-            }) { Icon(Icons.Default.Share, "Condividi", tint = Color.White) }
+            IconButton({ condividi(ctx, listOf(f)) }) { Icon(Icons.Default.Share, "Condividi", tint = Color.White) }
+            var menu by remember { mutableStateOf(false) }
+            Box {
+                IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "Altro", tint = Color.White) }
+                DropdownMenu(menu, { menu = false }) {
+                    DropdownMenuItem({ Text("Copia in…") }, { menu = false; azione = TipoOp.COPIA })
+                    DropdownMenuItem({ Text("Sposta in…") }, { menu = false; azione = TipoOp.SPOSTA })
+                    DropdownMenuItem({ Text("Elimina…") }, { menu = false; azione = TipoOp.ELIMINA })
+                    DropdownMenuItem({ Text("Modifica etichette") }, { menu = false; modifica = true })
+                    DropdownMenuItem({ Text("Altre foto di questa cartella") }, {
+                        menu = false; vm.query.value = ""; vm.filtri.value = Filtri(album = f.album); chiudi()
+                    })
+                }
+            }
         }
         if (info) {
             Column(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color(0xCC000000))
-                    .navigationBarsPadding().padding(16.dp).heightIn(max = 340.dp).verticalScroll(rememberScrollState())
+                    .navigationBarsPadding().padding(16.dp).heightIn(max = 380.dp).verticalScroll(rememberScrollState())
             ) {
                 Text(formatoData.format(Date(f.data)), color = Color.White, fontWeight = FontWeight.Bold)
-                Text("${f.album} · ${f.nome}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                if (dettagli.isEmpty()) Text("${f.album} · ${f.nome}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                for ((k, v) in dettagli) Text("$k: $v", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                 val nomi = persone.filter { it.id in f.persone }.map { it.nome ?: "persona senza nome" }
                 if (f.volti > 0) Text("Volti: ${f.volti}" + if (nomi.isNotEmpty()) " — ${nomi.joinToString(", ")}" else "", color = Color.White)
                 for (a in f.attr) Text("• " + descriviVolto(a, persone), color = Color.White, style = MaterialTheme.typography.bodySmall)
@@ -192,17 +417,27 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
                 if (f.colori.isNotEmpty())
                     Text("Colori: " + f.colori.entries.sortedByDescending { it.value }.take(4).joinToString(", ") { "${it.key} ${it.value}%" },
                         color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
-                if (f.cartella != null) Text("Da: " + nomeCartella(f.cartella), color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                 if (f.testoOriginale.isNotBlank())
                     Text("Testo letto: " + f.testoOriginale.take(400).replace('\n', ' '), color = Color.LightGray,
                         style = MaterialTheme.typography.bodySmall)
-                TextButton({
-                    val i = Intent(Intent.ACTION_VIEW).setDataAndType(f.uri, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    runCatching { ctx.startActivity(i) }
-                }) { Text(if (f.cartella != null) "Apri con…" else "Apri nella Galleria") }
-                TextButton({ modifica = true }) { Text("Modifica etichette") }
+                Row {
+                    TextButton({
+                        val i = Intent(Intent.ACTION_VIEW).setDataAndType(f.uri, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        runCatching { ctx.startActivity(i) }
+                    }) { Text(if (f.cartella != null) "Apri con…" else "Apri in Galleria") }
+                    TextButton({ modifica = true }) { Text("Etichette") }
+                    dettagli.firstOrNull { it.first == "Posizione" }?.let { (_, pos) ->
+                        TextButton({
+                            runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=" + pos.replace(" ", "")))) }
+                        }) { Text("Mappa") }
+                    }
+                }
             }
         }
+    }
+    azione?.let { t ->
+        val f = lista.getOrNull(stato.currentPage)?.let { x -> tutte.firstOrNull { it.id == x.id } ?: x }
+        if (f != null) DialogoAzione(vm, t, listOf(f), chiudi = { azione = null }) { if (t != TipoOp.COPIA) chiudi() }
     }
     if (modifica) {
         val f = lista.getOrNull(stato.currentPage)?.let { x -> tutte.firstOrNull { it.id == x.id } ?: x }

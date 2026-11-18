@@ -12,7 +12,10 @@ import java.nio.ByteOrder
 
 /** Foto indicizzata, in forma leggera per la ricerca in memoria. */
 /** Attributi stimati di un volto (età, sesso apparente, colore capelli e abiti) */
-data class VoltoAttr(val persona: Long, val eta: Float, val maschio: Float, val capelli: String?, val abiti: String?)
+data class VoltoAttr(val persona: Long, val eta: Float, val maschio: Float, val capelli: String?, val abiti: String?, val area: Float = 1f) {
+    /** Volto abbastanza grande (circa 70 px su 1280) perché età e sesso siano attendibili */
+    val affidabile: Boolean get() = area >= 0.003f
+}
 
 data class FotoIdx(
     val id: Long,
@@ -209,12 +212,12 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         val db = readableDatabase
         val pers = HashMap<Long, MutableSet<Long>>()
         val attr = HashMap<Long, MutableList<VoltoAttr>>()
-        db.rawQuery("SELECT foto_id, persona_id, eta, maschio, capelli, abiti FROM volto", null).use { c ->
+        db.rawQuery("SELECT foto_id, persona_id, eta, maschio, capelli, abiti, area FROM volto", null).use { c ->
             while (c.moveToNext()) {
                 val f = c.getLong(0); val p = c.getLong(1)
                 if (p > 0) pers.getOrPut(f) { mutableSetOf() }.add(p)
                 if (!c.isNull(2)) attr.getOrPut(f) { mutableListOf() }.add(
-                    VoltoAttr(p, c.getFloat(2), c.getFloat(3), c.getString(4), c.getString(5))
+                    VoltoAttr(p, c.getFloat(2), c.getFloat(3), c.getString(4), c.getString(5), c.getFloat(6))
                 )
             }
         }
@@ -316,6 +319,30 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             put("manuali", manuali.map { it.replace(";", ",").trim() }.filter { it.isNotEmpty() }.distinct().joinToString(";"))
             put("rimosse", rimosse.joinToString(";"))
         }, "id=?", arrayOf(fotoId.toString()))
+    }
+
+    /** Dopo una copia nella galleria: duplica la voce dell'indice (niente nuova analisi) */
+    fun duplica(vecchio: Long, nuovo: Long, modificata: Long, album: String, nome: String) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL(
+                "INSERT OR REPLACE INTO foto(id, data, modificata, nome, album, etichette, volti, sorriso, testo, colori, versione, uri, cartella, manuali, rimosse) " +
+                    "SELECT ?, data, ?, ?, ?, etichette, volti, sorriso, testo, colori, versione, NULL, NULL, manuali, rimosse FROM foto WHERE id = ?",
+                arrayOf<Any>(nuovo, modificata, nome, album, vecchio)
+            )
+            db.execSQL(
+                "INSERT INTO volto(foto_id, l, t, r, b, area, emb, persona_id, eta, maschio, capelli, abiti) " +
+                    "SELECT ?, l, t, r, b, area, emb, persona_id, eta, maschio, capelli, abiti FROM volto WHERE foto_id = ?",
+                arrayOf<Any>(nuovo, vecchio)
+            )
+            ricontaInterno(db)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    fun aggiornaAlbum(id: Long, album: String) {
+        writableDatabase.update("foto", ContentValues().apply { put("album", album) }, "id=?", arrayOf(id.toString()))
     }
 
     fun azzera() {

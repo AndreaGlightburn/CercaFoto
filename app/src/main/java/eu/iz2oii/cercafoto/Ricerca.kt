@@ -68,6 +68,7 @@ object Ricerca {
         var capelli: Set<String>? = null
         var abiti: String? = null
         fun ok(a: VoltoAttr): Boolean {
+            if ((sesso != null || eta) && !a.affidabile) return false
             sesso?.let { if (it == Sesso.M && a.maschio < 0.6f) return false; if (it == Sesso.F && a.maschio > 0.4f) return false }
             if (eta && (a.eta < etaMin || a.eta > etaMax)) return false
             capelli?.let { if (a.capelli == null || a.capelli !in it) return false }
@@ -222,7 +223,7 @@ object Ricerca {
             "colorata", "colorate", "colorati", "colorato", "variopinta", "variopinte" ->
                 return { f -> f.colori.count { it.key !in setOf("nero", "bianco", "grigio") && it.value >= 8 } >= 3 }
             "bambino", "bambini", "bimbo", "bimbi", "bimba", "bimbe", "neonato", "neonati", "piccoli" ->
-                return { f -> "Baby" in f.etichette || f.attr.any { it.eta < 12f } }
+                return { f -> "Baby" in f.etichette || f.attr.any { it.affidabile && it.eta < 12f } }
             "nessuno", "vuote" -> return { f -> f.volti == 0 }
             "esterna", "esterne", "usb", "chiavetta", "disco" -> return { f -> f.cartella != null }
         }
@@ -234,6 +235,42 @@ object Ricerca {
                 (et != null && f.etichette.keys.any { it in et }) ||
                 f.manuali.any { Testo.normalizza(it).split(' ').any { w -> w == t || (t.length >= 4 && w.startsWith(t)) } } ||
                 conTesto(f, t)
+        }
+    }
+}
+
+/** Filtri scelti dal pannello: quelli sul volto devono valere sulla stessa persona */
+data class Filtri(
+    val sesso: String? = null,     // "donna" | "uomo"
+    val eta: String? = null,       // "bambini" | "ragazzi" | "adulti" | "anziani"
+    val capelli: String? = null,   // nero | castano | biondo | rosso | grigio
+    val abiti: String? = null,     // nome colore
+    val album: String? = null,     // cartella (nome album)
+    val persone: Int? = null,      // 0 = nessuna, 1 = una, 2 = due, 3 = gruppo
+) {
+    val attivi: Int get() = listOfNotNull(sesso, eta, capelli, abiti, album, persone).size
+    private val suVolto get() = sesso != null || eta != null || capelli != null || abiti != null
+
+    fun okVolto(a: VoltoAttr): Boolean {
+        if ((sesso != null || eta != null) && !a.affidabile) return false
+        when (sesso) { "donna" -> if (a.maschio > 0.4f) return false; "uomo" -> if (a.maschio < 0.6f) return false }
+        when (eta) {
+            "bambini" -> if (a.eta >= 13f) return false
+            "ragazzi" -> if (a.eta < 13f || a.eta >= 30f) return false
+            "adulti" -> if (a.eta < 30f || a.eta >= 60f) return false
+            "anziani" -> if (a.eta < 60f) return false
+        }
+        if (capelli != null && a.capelli != capelli) return false
+        if (abiti != null && a.abiti != abiti) return false
+        return true
+    }
+
+    fun applica(lista: List<FotoIdx>): List<FotoIdx> {
+        if (attivi == 0) return lista
+        return lista.filter { f ->
+            (album == null || f.album == album) &&
+                (persone == null || when (persone) { 0 -> f.volti == 0; 1 -> f.volti == 1; 2 -> f.volti == 2; else -> f.volti >= 3 }) &&
+                (!suVolto || f.attr.any { okVolto(it) })
         }
     }
 }

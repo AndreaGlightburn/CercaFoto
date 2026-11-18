@@ -10,7 +10,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import android.app.Activity
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -69,9 +71,9 @@ fun App(vm: AppVM = viewModel()) {
     }
     fun chiedi() {
         val p = when {
-            Build.VERSION.SDK_INT >= 34 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED, Manifest.permission.POST_NOTIFICATIONS)
-            Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.POST_NOTIFICATIONS)
-            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+            Build.VERSION.SDK_INT >= 34 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.ACCESS_MEDIA_LOCATION)
+            Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.POST_NOTIFICATIONS, Manifest.permission.ACCESS_MEDIA_LOCATION)
+            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.ACCESS_MEDIA_LOCATION)
         }
         richiesta.launch(p)
     }
@@ -82,6 +84,34 @@ fun App(vm: AppVM = viewModel()) {
 
     if (!permesso) { SchermataPermessi(::chiedi); return }
 
+    // Permesso "posizione nelle foto" (per mostrare il GPS nei dettagli): chiesto una volta sola agli utenti già attivi
+    val posizione = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    LaunchedEffect(Unit) {
+        val pr = ctx.getSharedPreferences("impostazioni", Context.MODE_PRIVATE)
+        if (!pr.getBoolean("chiesto_posizione", false) &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_MEDIA_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            pr.edit().putBoolean("chiesto_posizione", true).apply()
+            posizione.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
+        }
+    }
+
+    // Conferme di sistema per spostare/eliminare foto della galleria
+    val consenso by vm.consenso.collectAsStateWithLifecycle()
+    val lanciaConsenso = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        val c = vm.consenso.value
+        vm.consenso.value = null
+        if (r.resultCode == Activity.RESULT_OK) c?.dopo?.invoke() else c?.annullato?.invoke()
+    }
+    LaunchedEffect(consenso) {
+        consenso?.let { lanciaConsenso.launch(IntentSenderRequest.Builder(it.pi).build()) }
+    }
+    val snackbar = remember { SnackbarHostState() }
+    val messaggio by vm.messaggio.collectAsStateWithLifecycle()
+    LaunchedEffect(messaggio) {
+        messaggio?.let { snackbar.showSnackbar(it, withDismissAction = true); vm.messaggio.value = null }
+    }
+    val lavoro by vm.lavoro.collectAsStateWithLifecycle()
+
     var scheda by rememberSaveable { mutableStateOf(Scheda.CERCA) }
     var visore by remember { mutableStateOf<Pair<List<FotoIdx>, Int>?>(null) }
     var personaAperta by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -90,6 +120,7 @@ fun App(vm: AppVM = viewModel()) {
 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbar) },
             bottomBar = {
                 NavigationBar {
                     NavigationBarItem(scheda == Scheda.CERCA, { scheda = Scheda.CERCA },
@@ -120,6 +151,14 @@ fun App(vm: AppVM = viewModel()) {
             BackHandler { visore = null }
             Visore(vm, l, i) { visore = null }
         }
+        lavoro?.let { t ->
+            Card(Modifier.align(Alignment.Center).padding(32.dp)) {
+                Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(28.dp)); Spacer(Modifier.width(16.dp)); Text(t)
+                }
+            }
+        }
+        if (visore != null) SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding())
     }
 }
 
