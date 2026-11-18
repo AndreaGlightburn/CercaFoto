@@ -83,6 +83,29 @@ class AppVM(app: Application) : AndroidViewModel(app) {
 
     fun rinomina(id: Long, nome: String) = op { db.rinomina(id, nome) }
 
+    suspend fun voltiFoto(fotoId: Long): List<VoltoInfo> = withContext(Dispatchers.IO) { runCatching { db.voltiFoto(fotoId) }.getOrDefault(emptyList()) }
+
+    /** Somiglianza di ogni persona rispetto a un singolo volto */
+    suspend fun somiglianzeVolto(voltoId: Long): Map<Long, Float> = withContext(Dispatchers.IO) {
+        runCatching {
+            val v = db.vettoreVolto(voltoId) ?: return@runCatching emptyMap<Long, Float>()
+            db.centri().mapValues { dot(v, it.value).coerceIn(0f, 1f) }
+        }.getOrDefault(emptyMap())
+    }
+
+    fun assegnaVolto(voltoId: Long, personaId: Long, nome: String?) = op {
+        db.assegnaVolto(voltoId, personaId)
+        messaggio.value = when {
+            personaId == Db.ESCLUSO -> "Volto tolto dal gruppo"
+            nome != null -> "Volto spostato in «$nome»"
+            else -> "Volto spostato. Dai un nome al gruppo perché lo spostamento resti anche dopo un ricalcolo."
+        }
+    }
+
+    fun nuovaPersonaDaVolto(voltoId: Long, nome: String) = op {
+        db.nuovaPersonaDaVolto(voltoId, nome); messaggio.value = "Creata la persona «${nome.trim()}»"
+    }
+
     /** Somiglianza (0..1) di ogni altra persona rispetto a [id], dai vettori dei volti */
     suspend fun somiglianze(id: Long): Map<Long, Float> = withContext(Dispatchers.IO) {
         runCatching {

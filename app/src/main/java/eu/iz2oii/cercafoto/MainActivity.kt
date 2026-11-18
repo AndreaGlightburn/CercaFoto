@@ -149,7 +149,7 @@ fun App(vm: AppVM = viewModel()) {
         }
         visore?.let { (l, i) ->
             BackHandler { visore = null }
-            Visore(vm, l, i) { visore = null }
+            Visore(vm, l, i, apriPersona = { id -> visore = null; scheda = Scheda.PERSONE; personaAperta = id }) { visore = null }
         }
         lavoro?.let { t ->
             Card(Modifier.align(Alignment.Center).padding(32.dp)) {

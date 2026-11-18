@@ -49,6 +49,9 @@ data class Persona(
     val coverUri: Uri,
 )
 
+/** Un volto di una foto, per il visore */
+data class VoltoInfo(val id: Long, val persona: Long, val l: Float, val t: Float, val r: Float, val b: Float, val conVettore: Boolean)
+
 fun uriFoto(id: Long): Uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
 
 fun FloatArray.toBlob(): ByteArray {
@@ -267,6 +270,43 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             n("SELECT COUNT(*) FROM volto"),
             n("SELECT COUNT(*) FROM persona WHERE foto >= 2 OR (nome IS NOT NULL AND nome <> '')")
         )
+    }
+
+    fun voltiFoto(fotoId: Long): List<VoltoInfo> {
+        val out = ArrayList<VoltoInfo>()
+        readableDatabase.rawQuery("SELECT id, persona_id, l, t, r, b, emb IS NOT NULL FROM volto WHERE foto_id = ? ORDER BY l", arrayOf(fotoId.toString())).use { c ->
+            while (c.moveToNext()) out += VoltoInfo(c.getLong(0), c.getLong(1), c.getFloat(2), c.getFloat(3), c.getFloat(4), c.getFloat(5), c.getInt(6) == 1)
+        }
+        return out
+    }
+
+    fun vettoreVolto(voltoId: Long): FloatArray? =
+        readableDatabase.rawQuery("SELECT emb FROM volto WHERE id = ?", arrayOf(voltoId.toString())).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getBlob(0).toFloats() else null
+        }
+
+    /** Assegna un singolo volto a una persona (o ESCLUSO per toglierlo da ogni gruppo) */
+    fun assegnaVolto(voltoId: Long, personaId: Long) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.update("volto", ContentValues().apply { put("persona_id", personaId) }, "id=?", arrayOf(voltoId.toString()))
+            ricontaInterno(db)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    /** Crea una nuova persona con nome a partire da un volto */
+    fun nuovaPersonaDaVolto(voltoId: Long, nome: String): Long {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val id = db.insert("persona", null, ContentValues().apply { put("nome", nome.trim()); put("copertina", voltoId) })
+            db.update("volto", ContentValues().apply { put("persona_id", id) }, "id=?", arrayOf(voltoId.toString()))
+            ricontaInterno(db)
+            db.setTransactionSuccessful()
+            return id
+        } finally { db.endTransaction() }
     }
 
     /** Centro (media normalizzata dei vettori dei volti) di ogni persona */

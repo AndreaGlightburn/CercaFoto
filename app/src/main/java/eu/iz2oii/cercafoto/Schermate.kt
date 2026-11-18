@@ -358,7 +358,7 @@ fun DialogoDestinazione(vm: AppVM, titolo: String, chiudi: () -> Unit, scegli: (
 private val formatoData = SimpleDateFormat("EEEE d MMMM yyyy, HH:mm", Locale.ITALIAN)
 
 @Composable
-fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
+fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit = {}, chiudi: () -> Unit) {
     val ctx = LocalContext.current
     val persone by vm.persone.collectAsStateWithLifecycle()
     val stato = rememberPagerState(initialPage = iniziale.coerceIn(0, max(0, lista.size - 1))) { lista.size }
@@ -367,6 +367,8 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
     var modifica by remember { mutableStateOf(false) }
     var azione by remember { mutableStateOf<TipoOp?>(null) }
     var dettagli by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var volti by remember { mutableStateOf<List<VoltoInfo>>(emptyList()) }
+    var voltoScelto by remember { mutableStateOf<VoltoInfo?>(null) }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         HorizontalPager(stato, Modifier.fillMaxSize(), key = { lista[it].id }) { p ->
             AsyncImage(
@@ -380,6 +382,7 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
         LaunchedEffect(f.id, f.album, info) {
             if (info) dettagli = withContext(Dispatchers.IO) { runCatching { Operazioni.dettagli(ctx, f) }.getOrDefault(emptyList()) }
         }
+        LaunchedEffect(f.id, f.persone, info) { if (info && f.volti > 0) volti = vm.voltiFoto(f.id) else volti = emptyList() }
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(chiudi) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Indietro", tint = Color.White) }
             Text("${stato.currentPage + 1} / ${lista.size}", color = Color.White, modifier = Modifier.weight(1f))
@@ -410,6 +413,23 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
                 val nomi = persone.filter { it.id in f.persone }.map { it.nome ?: "persona senza nome" }
                 if (f.volti > 0) Text("Volti: ${f.volti}" + if (nomi.isNotEmpty()) " — ${nomi.joinToString(", ")}" else "", color = Color.White)
                 for (a in f.attr) Text("• " + descriviVolto(a, persone), color = Color.White, style = MaterialTheme.typography.bodySmall)
+                if (volti.isNotEmpty()) {
+                    Text("Tocca un volto per vedere o cambiare il gruppo:", color = Color.LightGray, style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp))
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                        items(volti, key = { it.id }) { v ->
+                            val pers = persone.firstOrNull { it.id == v.persona }
+                            Column(Modifier.width(72.dp).clickable { voltoScelto = v }, horizontalAlignment = Alignment.CenterHorizontally) {
+                                VoltoMini(v.id, f.uri, v.l, v.t, v.r, v.b, 56.dp)
+                                Text(
+                                    pers?.nome ?: if (pers != null) "senza nome" else "nessun gruppo",
+                                    color = if (pers?.nome != null) Color.White else Color.LightGray, maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
                 if (f.etichette.isNotEmpty())
                     Text("Contiene: " + f.etichette.entries.sortedByDescending { it.value }.joinToString(", ") { Dizionario.italiano(it.key) },
                         color = Color.White)
@@ -435,6 +455,10 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
             }
         }
     }
+    voltoScelto?.let { v ->
+        val f = lista.getOrNull(stato.currentPage)
+        if (f != null) DialogoVolto(vm, v, f.uri, persone, { voltoScelto = null }) { id -> voltoScelto = null; apriPersona(id) }
+    }
     azione?.let { t ->
         val f = lista.getOrNull(stato.currentPage)?.let { x -> tutte.firstOrNull { it.id == x.id } ?: x }
         if (f != null) DialogoAzione(vm, t, listOf(f), chiudi = { azione = null }) { if (t != TipoOp.COPIA) chiudi() }
@@ -442,6 +466,56 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, chiudi: () -> Unit) {
     if (modifica) {
         val f = lista.getOrNull(stato.currentPage)?.let { x -> tutte.firstOrNull { it.id == x.id } ?: x }
         if (f != null) DialogoEtichette(f, { modifica = false }) { man, rim -> vm.salvaEtichette(f.id, man, rim) }
+    }
+}
+
+@Composable
+fun DialogoVolto(vm: AppVM, v: VoltoInfo, uri: Uri, persone: List<Persona>, chiudi: () -> Unit, apriPersona: (Long) -> Unit) {
+    val attuale = persone.firstOrNull { it.id == v.persona }
+    var scegli by remember { mutableStateOf(false) }
+    var nuovoNome by remember { mutableStateOf<String?>(null) }
+    var simili by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
+    LaunchedEffect(v.id) { simili = vm.somiglianzeVolto(v.id) }
+    when {
+        nuovoNome != null -> AlertDialog(
+            onDismissRequest = chiudi,
+            title = { Text("Nuova persona") },
+            text = { OutlinedTextField(nuovoNome!!, { nuovoNome = it }, singleLine = true, placeholder = { Text("Nome") }) },
+            confirmButton = {
+                TextButton({ if (nuovoNome!!.isNotBlank()) { vm.nuovaPersonaDaVolto(v.id, nuovoNome!!); chiudi() } }) { Text("Crea") }
+            },
+            dismissButton = { TextButton(chiudi) { Text("Annulla") } },
+        )
+        scegli -> DialogoScegliPersona("Sposta questo volto in…", persone, v.persona, simili, chiudi,
+            extra = { TextButton({ scegli = false; nuovoNome = "" }) { Text("+ Nuova persona") } }) { o ->
+            vm.assegnaVolto(v.id, o.id, o.nome); chiudi()
+        }
+        else -> AlertDialog(
+            onDismissRequest = chiudi,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    VoltoMini(v.id, uri, v.l, v.t, v.r, v.b, 56.dp)
+                    Column(Modifier.padding(start = 12.dp)) {
+                        Text(attuale?.nome ?: if (attuale != null) "Gruppo senza nome" else "Nessun gruppo")
+                        attuale?.let { Text("${it.foto} foto nel gruppo", style = MaterialTheme.typography.bodySmall) }
+                    }
+                }
+            },
+            text = {
+                Column {
+                    if (!v.conVettore) Text("Volto troppo piccolo per il riconoscimento automatico, ma puoi assegnarlo a mano.",
+                        style = MaterialTheme.typography.bodySmall)
+                    if (attuale != null) TextButton({ apriPersona(attuale.id) }) { Text("Apri il gruppo") }
+                    TextButton({ scegli = true }) { Text(if (attuale != null) "Sposta in un'altra persona…" else "Assegna a una persona…") }
+                    TextButton({ nuovoNome = "" }) { Text("Crea una nuova persona") }
+                    if (attuale != null) TextButton({ vm.assegnaVolto(v.id, Db.ESCLUSO, null); chiudi() }) {
+                        Text("Togli dal gruppo", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(chiudi) { Text("Chiudi") } },
+        )
     }
 }
 
@@ -507,14 +581,14 @@ fun DialogoEtichette(f: FotoIdx, chiudi: () -> Unit, salva: (List<String>, Set<S
 
 private object CacheVolti { val lru = LruCache<Long, ImageBitmap>(300) }
 
-private fun caricaVolto(ctx: Context, p: Persona): ImageBitmap? {
-    val bw = max(p.r - p.l, 0.02f)
+private fun caricaVolto(ctx: Context, uri: Uri, pl: Float, pt: Float, pr: Float, pb: Float): ImageBitmap? {
+    val bw = max(pr - pl, 0.02f)
     val lato = (240f / bw).toInt().coerceIn(240, 2048)
-    var bmp = ctx.contentResolver.loadThumbnail(p.coverUri, Size(lato, lato), null)
+    val bmp = ctx.contentResolver.loadThumbnail(uri, Size(lato, lato), null)
     val w = bmp.width; val h = bmp.height
-    val mx = (p.r - p.l) * 0.2f; val my = (p.b - p.t) * 0.2f
-    val l = (max(0f, p.l - mx) * w).toInt(); val t = (max(0f, p.t - my) * h).toInt()
-    val r = (min(1f, p.r + mx) * w).toInt(); val b = (min(1f, p.b + my) * h).toInt()
+    val mx = (pr - pl) * 0.2f; val my = (pb - pt) * 0.2f
+    val l = (max(0f, pl - mx) * w).toInt(); val t = (max(0f, pt - my) * h).toInt()
+    val r = (min(1f, pr + mx) * w).toInt(); val b = (min(1f, pb + my) * h).toInt()
     if (r - l < 2 || b - t < 2) return null
     val crop = Bitmap.createBitmap(bmp, l, t, r - l, b - t)
     val out = Bitmap.createScaledBitmap(crop, 200, 200 * (b - t) / (r - l), true)
@@ -522,14 +596,15 @@ private fun caricaVolto(ctx: Context, p: Persona): ImageBitmap? {
     return out.asImageBitmap()
 }
 
+/** Miniatura rotonda di un volto (voltoId è la chiave della cache) */
 @Composable
-fun VoltoMini(p: Persona, dim: Dp) {
+fun VoltoMini(voltoId: Long, uri: Uri, l: Float, t: Float, r: Float, b: Float, dim: Dp) {
     val ctx = LocalContext.current
-    var img by remember(p.coverVolto) { mutableStateOf(CacheVolti.lru.get(p.coverVolto)) }
-    LaunchedEffect(p.coverVolto) {
-        if (img == null && p.coverVolto > 0) {
-            img = withContext(Dispatchers.IO) { runCatching { caricaVolto(ctx, p) }.getOrNull() }
-            img?.let { CacheVolti.lru.put(p.coverVolto, it) }
+    var img by remember(voltoId) { mutableStateOf(CacheVolti.lru.get(voltoId)) }
+    LaunchedEffect(voltoId) {
+        if (img == null && voltoId > 0) {
+            img = withContext(Dispatchers.IO) { runCatching { caricaVolto(ctx, uri, l, t, r, b) }.getOrNull() }
+            img?.let { CacheVolti.lru.put(voltoId, it) }
         }
     }
     Box(Modifier.size(dim).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
@@ -537,6 +612,56 @@ fun VoltoMini(p: Persona, dim: Dp) {
         if (i != null) Image(i, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
         else Icon(Icons.Default.Person, null)
     }
+}
+
+@Composable
+fun VoltoMini(p: Persona, dim: Dp) = VoltoMini(p.coverVolto, p.coverUri, p.l, p.t, p.r, p.b, dim)
+
+/** Elenco persone con ricerca per nome e suggerimenti per somiglianza */
+@Composable
+fun DialogoScegliPersona(
+    titolo: String, persone: List<Persona>, escludi: Long?, simili: Map<Long, Float>,
+    chiudi: () -> Unit, extra: (@Composable () -> Unit)? = null, scegli: (Persona) -> Unit,
+) {
+    var cerca by remember { mutableStateOf("") }
+    val q = Testo.normalizza(cerca)
+    val altre = persone.filter { it.id != escludi && (it.nome != null || it.foto >= 2) }
+    val trovate = if (q.isEmpty()) emptyList() else altre.filter { o -> o.nome?.let { Testo.normalizza(it).contains(q) } == true }
+    val suggerite = altre.filter { (simili[it.id] ?: 0f) >= 0.35f }.sortedByDescending { simili[it.id] }.take(6)
+    val nominate = altre.filter { it.nome != null }.sortedBy { Testo.normalizza(it.nome!!) }
+    val senzaNome = altre.filter { it.nome == null }.sortedByDescending { simili[it.id] ?: 0f }
+    AlertDialog(
+        onDismissRequest = chiudi,
+        title = { Text(titolo) },
+        text = {
+            Column {
+                OutlinedTextField(cerca, { cerca = it }, Modifier.fillMaxWidth(), singleLine = true,
+                    placeholder = { Text("Cerca un nome") }, leadingIcon = { Icon(Icons.Default.Search, null) },
+                    trailingIcon = { if (cerca.isNotEmpty()) IconButton({ cerca = "" }) { Icon(Icons.Default.Close, "Cancella") } })
+                extra?.invoke()
+                LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    fun sezione(t: String, lista: List<Persona>, chiave: String) {
+                        if (lista.isEmpty()) return
+                        item(key = "t$chiave") {
+                            Text(t, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
+                        }
+                        items(lista, key = { "$chiave${it.id}" }) { o -> RigaPersona(o, simili[o.id]) { scegli(o) } }
+                    }
+                    if (q.isNotEmpty()) {
+                        sezione("Risultati", trovate, "r")
+                        if (trovate.isEmpty()) item { Text("Nessun nome trovato.", Modifier.padding(8.dp)) }
+                    } else {
+                        sezione("Più somiglianti", suggerite, "s")
+                        sezione("Con nome (A-Z)", nominate, "n")
+                        sezione("Senza nome", senzaNome, "x")
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(chiudi) { Text("Annulla") } },
+    )
 }
 
 @Composable
@@ -648,48 +773,11 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
         )
     }
     if (dialogoUnisci) {
-        var cerca by remember { mutableStateOf("") }
         var simili by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
         LaunchedEffect(p.id) { simili = vm.somiglianze(p.id) }
-        val q = Testo.normalizza(cerca)
-        val altre = persone.filter { it.id != p.id && (it.nome != null || it.foto >= 2) }
-        val trovate = if (q.isEmpty()) emptyList() else altre.filter { o -> o.nome?.let { Testo.normalizza(it).contains(q) } == true }
-        val suggerite = altre.filter { (simili[it.id] ?: 0f) >= 0.35f }.sortedByDescending { simili[it.id] }.take(6)
-        val nominate = altre.filter { it.nome != null }.sortedBy { Testo.normalizza(it.nome!!) }
-        val senzaNome = altre.filter { it.nome == null }.sortedByDescending { simili[it.id] ?: 0f }
-        AlertDialog(
-            onDismissRequest = { dialogoUnisci = false },
-            title = { Text("È la stessa persona di…") },
-            text = {
-                Column {
-                    OutlinedTextField(cerca, { cerca = it }, Modifier.fillMaxWidth(), singleLine = true,
-                        placeholder = { Text("Cerca un nome") }, leadingIcon = { Icon(Icons.Default.Search, null) },
-                        trailingIcon = { if (cerca.isNotEmpty()) IconButton({ cerca = "" }) { Icon(Icons.Default.Close, "Cancella") } })
-                    LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                        fun sezione(titolo: String, lista: List<Persona>, chiave: String) {
-                            if (lista.isEmpty()) return
-                            item(key = "t$chiave") {
-                                Text(titolo, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge,
-                                    modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
-                            }
-                            items(lista, key = { "$chiave${it.id}" }) { o ->
-                                RigaPersona(o, simili[o.id]) { vm.unisci(p.id, o.id); dialogoUnisci = false }
-                            }
-                        }
-                        if (q.isNotEmpty()) {
-                            sezione("Risultati", trovate, "r")
-                            if (trovate.isEmpty()) item { Text("Nessun nome trovato.", Modifier.padding(8.dp)) }
-                        } else {
-                            sezione("Più somiglianti", suggerite, "s")
-                            sezione("Con nome (A-Z)", nominate, "n")
-                            sezione("Senza nome", senzaNome, "x")
-                        }
-                    }
-                }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton({ dialogoUnisci = false }) { Text("Annulla") } },
-        )
+        DialogoScegliPersona("È la stessa persona di…", persone, p.id, simili, { dialogoUnisci = false }) { o ->
+            vm.unisci(p.id, o.id); dialogoUnisci = false
+        }
     }
     daEscludere?.let { f ->
         AlertDialog(
