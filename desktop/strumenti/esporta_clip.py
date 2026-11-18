@@ -37,7 +37,7 @@ torch.onnx.export(Img().eval(), (torch.randn(1, 3, 224, 224),), f"{OUT}/clip_imm
                   input_names=["pixel_values"], output_names=["emb"], dynamic_axes={"pixel_values": {0: "b"}, "emb": {0: "b"}}, opset_version=17)
 
 for n in ["clip_testo", "clip_immagine"]:
-    quantize_dynamic(f"{OUT}/{n}_fp32.onnx", f"{OUT}/{n}.onnx", weight_type=QuantType.QInt8)
+    quantize_dynamic(f"{OUT}/{n}_fp32.onnx", f"{OUT}/{n}.onnx", weight_type=QuantType.QInt8, op_types_to_quantize=["MatMul", "Gemm"])
 
 # riferimenti per verificare l'app
 testi = ["un cane sulla spiaggia", "a dog on the beach", "torta di compleanno con candeline", "bambino in bicicletta", "tramonto sul mare"]
