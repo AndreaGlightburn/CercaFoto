@@ -32,7 +32,11 @@ object Clip {
     private val DEV = floatArrayOf(0.26862954f, 0.26130258f, 0.27577711f)
 
     /** Vettore 512 normalizzato: lato corto a 224 (bicubico), ritaglio centrale 224×224 */
-    fun immagine(src: BufferedImage): FloatArray {
+    fun immagine(origine: BufferedImage): FloatArray {
+        // riduzione a metà per passi (fa da filtro anti-aliasing, come il ridimensionamento originale del modello)
+        var src = origine
+        while (minOf(src.width, src.height) >= 448 * 2) src = Immagini.scala(src, src.width / 2, src.height / 2)
+        if (minOf(src.width, src.height) >= 448) src = Immagini.scala(src, src.width / 2, src.height / 2)
         val s = 224.0 / minOf(src.width, src.height)
         val w = max(224, (src.width * s).roundToInt()); val h = max(224, (src.height * s).roundToInt())
         val r = BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
