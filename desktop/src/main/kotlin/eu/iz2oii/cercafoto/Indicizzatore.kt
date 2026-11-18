@@ -90,7 +90,7 @@ object Indicizzatore {
                             val r = Analisi.analizza(f)
                             val data = Immagini.dataScatto(f) ?: f.lastModified()
                             val id = Db.salva(f.absolutePath, ff.cartella, f.name, f.parentFile?.name ?: "", data, f.lastModified(), f.length(),
-                                r?.volti ?: emptyList(), r?.sorriso ?: 0f, r?.colori ?: emptyMap())
+                                r?.volti ?: emptyList(), r?.sorriso ?: 0f, r?.colori ?: emptyMap(), r?.clip ?: (if (Clip.disponibile) FloatArray(0) else null), r?.etichette ?: emptyMap())
                             r?.miniatura?.let { Percorsi.miniatura(id).writeBytes(it) }
                         }
                         val n = fatte.incrementAndGet()
@@ -102,6 +102,25 @@ object Indicizzatore {
         if (daFare.isNotEmpty() || rimosse.isNotEmpty()) {
             stato.value = Avanzamento(true, "volti")
             Raggruppa.esegui()
+        }
+        // foto indicizzate con la versione precedente: aggiunge ricerca libera ed etichette oggetti
+        if (Clip.disponibile) {
+            val mancanti = Db.senzaClip()
+            val n = AtomicInteger(0)
+            stato.value = Avanzamento(true, "clip", 0, mancanti.size)
+            withContext(pool) {
+                mancanti.chunked(64).forEach { blocco ->
+                    if (!isActive) return@withContext
+                    blocco.map { (id, percorso) ->
+                        async {
+                            val e = runCatching { Immagini.leggi(File(percorso), 640)?.let { Clip.immagine(it) } }.getOrNull()
+                            Db.salvaClip(id, e, e?.let { runCatching { Clip.etichette(it) }.getOrNull() } ?: emptyMap())
+                            val k = n.incrementAndGet()
+                            if (k % 4 == 0 || k == mancanti.size) stato.value = Avanzamento(true, "clip", k, mancanti.size)
+                        }
+                    }.awaitAll()
+                }
+            }
         }
     }
 

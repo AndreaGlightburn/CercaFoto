@@ -109,7 +109,7 @@ fun App(finestra: java.awt.Window) {
     }
 }
 
-private val SUGGERIMENTI = listOf("Persone", "Gruppi", "Sorrisi", "Bambini", "Donne", "Uomini", "Anziani", "Giovani", "Capelli biondi", "Rosso", "Blu", "Verde", "Colorate", "Estate", "Natale")
+private val SUGGERIMENTI = listOf("Persone", "Gruppi", "Sorrisi", "Bambini", "Donne", "Uomini", "Anziani", "Giovani", "Animali", "Cani", "Gatti", "Cibo", "Mare", "Montagna", "Natura", "Città", "Auto", "Feste", "Documenti", "Capelli biondi", "Rosso", "Blu", "Colorate", "Estate", "Natale")
 
 // ---------------------------------------------------------------- CERCA
 
@@ -124,10 +124,17 @@ fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit) {
     var pannello by remember { mutableStateOf(false) }
     var aggiungi by remember { mutableStateOf(false) }
 
+    val descr by Stato.descrizione.collectAsState()
     Column(Modifier.fillMaxSize().padding(8.dp)) {
+        if (Clip.disponibile) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
+            FilterChip(!descr, { Stato.descrizione.value = false }, label = { Text("Parole chiave") })
+            FilterChip(descr, { Stato.descrizione.value = true }, label = { Text("Descrizione libera") })
+            Text(if (descr) "Descrivi la foto come la racconteresti: «bambino che soffia le candeline», «tramonto al mare con la barca»"
+                else "Nomi, persone, oggetti, colori, date: «Mario cane», «donna anziana», «2023 mare»", style = MaterialTheme.typography.bodySmall)
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(q, { Stato.query.value = it }, Modifier.weight(1f), singleLine = true,
-                placeholder = { Text("Cerca: Mario, donna anziana, maglia rossa, 2023, agosto, cartella…") },
+                placeholder = { Text(if (descr) "Descrivi la foto che cerchi…" else "Cerca: Mario, donna anziana, maglia rossa, cane, mare, 2023…") },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 trailingIcon = { if (q.isNotEmpty()) IconButton({ Stato.query.value = "" }) { Icon(Icons.Default.Close, "Cancella") } })
             Spacer(Modifier.width(8.dp))
@@ -252,7 +259,8 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             TextButton({ aggiungi = true }) { Text("Aggiungi a una persona…") }
             if (f.colori.isNotEmpty()) Text("Colori: " + f.colori.entries.sortedByDescending { it.value }.take(4).joinToString(", ") { "${it.key} ${it.value}%" }, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
-            Text("Etichette", fontWeight = FontWeight.Bold)
+            if (f.etichette.isNotEmpty()) Text("Contiene (stima): " + f.etichette.entries.sortedByDescending { it.value }.joinToString(", ") { Dizionario.italiano(it.key) }, style = MaterialTheme.typography.bodySmall)
+            Text("Le tue etichette", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
             Text(if (f.manuali.isEmpty()) "Nessuna" else f.manuali.joinToString(", "))
             TextButton({ modifica = true }) { Text("Modifica etichette") }
             TextButton({ Stato.query.value = ""; Stato.filtri.value = Filtri(album = f.album); chiudi() }) { Text("Altre foto di questa cartella") }
@@ -498,7 +506,7 @@ fun SchermataIndice(finestra: java.awt.Window) {
                 when {
                     av.attivo && av.fase == "volti" -> { Text("Raggruppo i volti…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                     av.attivo && av.totale > 0 -> {
-                        Text((if (av.fase == "volti_hd") "Rianalisi volti in alta risoluzione: " else "Analisi foto: ") + "${av.fatte} di ${av.totale}")
+                        Text(when (av.fase) { "volti_hd" -> "Rianalisi volti in alta risoluzione: "; "clip" -> "Preparo la ricerca libera e gli oggetti: "; else -> "Analisi foto: " } + "${av.fatte} di ${av.totale}")
                         LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
                     }
                     av.attivo -> { Text("Lettura delle cartelle…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
@@ -534,7 +542,7 @@ fun SchermataIndice(finestra: java.awt.Window) {
             }
         }
         OutlinedButton({ confermaAzzera = true }, enabled = !av.attivo) { Text("Rianalizza tutto da capo") }
-        Text("Cerca Foto per Windows ${System.getProperty("jpackage.app-version") ?: ""} · Pony10 · Modelli: FaceNet (Apache 2.0), UltraFace (MIT), età/sesso (MIT)", style = MaterialTheme.typography.bodySmall)
+        Text("Cerca Foto per Windows ${System.getProperty("jpackage.app-version") ?: ""} · Pony10 · Modelli: FaceNet (Apache 2.0), UltraFace (MIT), età/sesso (MIT), CLIP multilingue (Apache 2.0 / MIT)", style = MaterialTheme.typography.bodySmall)
     }
     if (confermaAzzera) AlertDialog(
         onDismissRequest = { confermaAzzera = false },

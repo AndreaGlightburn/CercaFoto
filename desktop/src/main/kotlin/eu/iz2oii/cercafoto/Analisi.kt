@@ -297,12 +297,15 @@ object Colori {
 // ---------------------------------------------------------------- analisi di una foto
 
 object Analisi {
-    class Risultato(val volti: List<Db.VoltoNuovo>, val sorriso: Float, val colori: Map<String, Int>, val miniatura: ByteArray)
+    class Risultato(val volti: List<Db.VoltoNuovo>, val sorriso: Float, val colori: Map<String, Int>, val miniatura: ByteArray,
+                    val clip: FloatArray?, val etichette: Map<String, Int>)
 
     fun analizza(f: File, lato: Int = 1280): Risultato? {
         val img = Immagini.leggi(f, lato) ?: return null
         val volti = Modelli.rileva(img).mapNotNull { b -> volto(img, b[0], b[1], b[2], b[3]) }
-        return Risultato(volti, 0f, Colori.foto(img), Immagini.jpeg(Immagini.ridimensiona(img, 360)))
+        val clip = if (Clip.disponibile) runCatching { Clip.immagine(img) }.getOrNull() else null
+        val et = clip?.let { runCatching { Clip.etichette(it) }.getOrDefault(emptyMap()) } ?: emptyMap()
+        return Risultato(volti, 0f, Colori.foto(img), Immagini.jpeg(Immagini.ridimensiona(img, 360)), clip, et)
     }
 
     fun volto(img: BufferedImage, l: Float, t: Float, r: Float, b: Float): Db.VoltoNuovo? {

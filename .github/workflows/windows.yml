@@ -18,6 +18,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
+      - name: Modelli CLIP (dalla release modelli-clip)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download modelli-clip -p clip_testo.onnx -p clip_immagine.onnx -p vocab.txt -D desktop/src/main/resources/modelli --clobber
       - name: Compila
         run: gradle -p desktop createDistributable packageMsi --no-daemon --stacktrace
       - name: Prepara i file

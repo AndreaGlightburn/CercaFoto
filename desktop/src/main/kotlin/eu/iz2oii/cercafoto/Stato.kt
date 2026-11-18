@@ -29,8 +29,19 @@ object Stato {
     val messaggio = MutableStateFlow<String?>(null)
     val avanzamento get() = Indicizzatore.stato
 
+    /** false = parole chiave (come sul telefono), true = descrizione libera (CLIP) */
+    val descrizione = MutableStateFlow(false)
+    @Volatile private var vettori: Map<Long, FloatArray> = emptyMap()
+
+    private data class Richiesta(val q: String, val descr: Boolean)
+
     val risultati: StateFlow<List<FotoIdx>> =
-        combine(query.debounce(200), foto, persone, filtri) { q, f, p, fi -> fi.applica(Ricerca.cerca(q, f, p)) }
+        combine(combine(query, descrizione) { q, d -> Richiesta(q, d) }.debounce(300), foto, persone, filtri) { r, f, p, fi ->
+            if (r.descr && r.q.isNotBlank() && Clip.disponibile) {
+                val perId = f.associateBy { it.id }
+                fi.applica(runCatching { Clip.cerca(r.q.trim(), vettori) }.getOrDefault(emptyList()).mapNotNull { perId[it.first] })
+            } else fi.applica(Ricerca.cerca(r.q, f, p))
+        }
             .flowOn(Dispatchers.Default)
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
@@ -38,13 +49,17 @@ object Stato {
         ricarica()
         // aggiorna i risultati durante l'indicizzazione
         scope.launch {
-            var ultimo = 0
-            Indicizzatore.stato.collect { a -> if (a.attivo && a.fatte - ultimo >= 100) { ultimo = a.fatte; ricarica() }; if (!a.attivo) ultimo = 0 }
+            var ultimo = 0; var fase = ""
+            Indicizzatore.stato.collect { a ->
+                if (a.fase != fase) { fase = a.fase; ultimo = 0 }
+                if (a.attivo && a.fatte - ultimo >= 100) { ultimo = a.fatte; ricarica() }
+            }
         }
     }
 
     fun ricarica() {
         scope.launch {
+            vettori = Db.vettoriClip()
             foto.value = Db.caricaFoto(); persone.value = Db.caricaPersone(); conteggi.value = Db.conteggi()
         }
     }

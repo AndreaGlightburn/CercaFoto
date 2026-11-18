@@ -86,6 +86,8 @@ object Db {
             s.execute("CREATE INDEX IF NOT EXISTS volto_foto ON volto(foto_id)")
             s.execute("CREATE INDEX IF NOT EXISTS volto_persona ON volto(persona_id)")
             s.execute("CREATE TABLE IF NOT EXISTS persona(id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, copertina INTEGER, foto INTEGER DEFAULT 0, nascosta INTEGER DEFAULT 0, uid TEXT)")
+            // v2: ricerca libera (vettore CLIP) ed etichette automatiche
+            for (col in listOf("clip BLOB", "etichette TEXT")) runCatching { s.execute("ALTER TABLE foto ADD COLUMN $col") }
         }
     }
 
@@ -155,7 +157,7 @@ object Db {
 
     /** Salva (o aggiorna) una foto analizzata; mantiene etichette manuali e collegamenti a mano. Ritorna l'id. */
     fun salva(percorso: String, cartella: String, nome: String, album: String, data: Long, modificata: Long, dimensione: Long,
-              volti: List<VoltoNuovo>, sorriso: Float, colori: Map<String, Int>): Long = tx {
+              volti: List<VoltoNuovo>, sorriso: Float, colori: Map<String, Int>, clip: FloatArray? = null, etichette: Map<String, Int> = emptyMap()): Long = tx {
         var id = -1L
         q("SELECT id FROM foto WHERE percorso = ?", percorso) { id = it.getLong(1) }
         val colStr = colori.entries.joinToString(";") { "${it.key}:${it.value}" }
@@ -167,6 +169,7 @@ object Db {
             q("SELECT id FROM volto WHERE foto_id = ? AND manuale = 0", id) { Percorsi.volto(it.getLong(1)).delete() }
             u("DELETE FROM volto WHERE foto_id = ? AND manuale = 0", id)
         }
+        if (clip != null) u("UPDATE foto SET clip = ?, etichette = ? WHERE id = ?", clip.toBlob(), etichette.entries.joinToString(";") { "${it.key}:${it.value}" }, id)
         for (v in volti) {
             val vid = ins("INSERT INTO volto(foto_id, l, t, r, b, area, emb, persona_id, eta, maschio, capelli, abiti) VALUES (?,?,?,?,?,?,?,0,?,?,?,?)",
                 id, v.l, v.t, v.r, v.b, (v.r - v.l) * (v.b - v.t), v.emb?.toBlob(), v.attr?.eta, v.attr?.maschio, v.attr?.capelli, v.attr?.abiti)
@@ -187,17 +190,37 @@ object Db {
             if (eta != null) attr.getOrPut(f) { mutableListOf() }.add(VoltoAttr(p, eta, r.getFloat(4), r.getString(5), r.getString(6), r.getFloat(7)))
         }
         val out = ArrayList<FotoIdx>()
-        q("SELECT id, data, nome, album, volti, sorriso, colori, percorso, cartella, manuali, rimosse FROM foto ORDER BY data DESC") { r ->
+        q("SELECT id, data, nome, album, volti, sorriso, colori, percorso, cartella, manuali, rimosse, etichette FROM foto ORDER BY data DESC") { r ->
             val id = r.getLong(1)
+            val rimosse = r.getString(11)?.split(';')?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
             out += FotoIdx(
-                id = id, data = r.getLong(2), nome = r.getString(3) ?: "", album = r.getString(4) ?: "", etichette = emptyMap(),
+                id = id, data = r.getLong(2), nome = r.getString(3) ?: "", album = r.getString(4) ?: "",
+                etichette = decodifica(r.getString(12)).filterKeys { it !in rimosse },
                 volti = r.getInt(5), sorriso = r.getFloat(6), testo = "", testoOriginale = "", persone = pers[id] ?: emptySet(),
                 colori = decodifica(r.getString(7)), attr = attr[id] ?: emptyList(), percorso = r.getString(8), cartella = r.getString(9),
                 manuali = r.getString(10)?.split(';')?.filter { it.isNotBlank() } ?: emptyList(),
-                rimosse = r.getString(11)?.split(';')?.filter { it.isNotBlank() }?.toSet() ?: emptySet(),
+                rimosse = rimosse,
             )
         }
         return out
+    }
+
+    /** Vettori CLIP di tutte le foto (per la ricerca libera) */
+    fun vettoriClip(): HashMap<Long, FloatArray> {
+        val m = HashMap<Long, FloatArray>()
+        q("SELECT id, clip FROM foto WHERE clip IS NOT NULL AND length(clip) > 0") { m[it.getLong(1)] = it.getBytes(2).toFloats() }
+        return m
+    }
+
+    fun senzaClip(): List<Pair<Long, String>> {
+        val l = ArrayList<Pair<Long, String>>()
+        q("SELECT id, percorso FROM foto WHERE clip IS NULL ORDER BY data DESC") { l += it.getLong(1) to it.getString(2) }
+        return l
+    }
+
+    fun salvaClip(id: Long, clip: FloatArray?, etichette: Map<String, Int>) {
+        // senza vettore (file illeggibile) si salva un vettore vuoto per non riprovare ogni volta
+        u("UPDATE foto SET clip = ?, etichette = ? WHERE id = ?", (clip ?: FloatArray(0)).toBlob(), etichette.entries.joinToString(";") { "${it.key}:${it.value}" }, id)
     }
 
     fun caricaPersone(): List<Persona> {

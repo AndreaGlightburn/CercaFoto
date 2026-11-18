@@ -5,3 +5,6 @@ local.properties
 .idea/
 desktop/build/
 desktop/.gradle/
+desktop/src/main/resources/modelli/clip_*.onnx
+desktop/src/main/resources/modelli/vocab.txt
+desktop/strumenti/out/
