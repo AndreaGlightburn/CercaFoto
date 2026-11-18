@@ -1,0 +1,30 @@
+name: Modelli CLIP
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths: ['desktop/strumenti/esporta_clip.py', '.github/workflows/modelli-clip.yml']
+permissions:
+  contents: write
+jobs:
+  esporta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Dipendenze
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.4.1
+          pip install "transformers==4.44.2" "sentence-transformers==3.0.1" onnx==1.16.2 onnxruntime==1.19.2 pillow numpy
+      - name: Esporta
+        working-directory: desktop/strumenti
+        run: python esporta_clip.py
+      - name: Pubblica
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd desktop/strumenti/out
+          gh release delete modelli-clip -y --cleanup-tag || true
+          gh release create modelli-clip clip_testo.onnx clip_immagine.onnx vocab.txt riferimenti.json prova.png --title "Modelli CLIP per Cerca Foto Windows" --notes "sentence-transformers/clip-ViT-B-32-multilingual-v1 (Apache 2.0) + openai/clip-vit-base-patch32 (MIT), ONNX int8" --target ${{ github.sha }}
