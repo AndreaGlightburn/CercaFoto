@@ -192,8 +192,8 @@ fun condividi(ctx: Context, lista: List<FotoIdx>) {
     ctx.startActivity(Intent.createChooser(i, "Condividi"))
 }
 
-private val NOMI_ETA = mapOf("bambini" to "Bambini (0-12)", "ragazzi" to "Ragazzi (13-29)", "adulti" to "Adulti (30-59)", "anziani" to "Anziani (60+)")
-private val NOMI_CAPELLI = mapOf("nero" to "Neri", "castano" to "Castani", "biondo" to "Biondi", "rosso" to "Rossi", "grigio" to "Grigi/bianchi")
+val NOMI_ETA = mapOf("bambini" to "Bambini (0-12)", "ragazzi" to "Ragazzi (13-29)", "adulti" to "Adulti (30-59)", "anziani" to "Anziani (60+)")
+val NOMI_CAPELLI = mapOf("nero" to "Neri", "castano" to "Castani", "biondo" to "Biondi", "rosso" to "Rossi", "grigio" to "Grigi/bianchi")
 private val NOMI_PERSONE = mapOf(0 to "Nessuna persona", 1 to "Una persona", 2 to "Due persone", 3 to "Gruppo (3+)")
 
 fun descriviFiltri(f: Filtri): List<Pair<String, (Filtri) -> Filtri>> = buildList {
@@ -207,7 +207,7 @@ fun descriviFiltri(f: Filtri): List<Pair<String, (Filtri) -> Filtri>> = buildLis
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun <T> Scelte(titolo: String, opzioni: List<Pair<T, String>>, valore: T?, scegli: (T?) -> Unit) {
+fun <T> Scelte(titolo: String, opzioni: List<Pair<T, String>>, valore: T?, scegli: (T?) -> Unit) {
     Text(titolo, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
     FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         for ((v, nome) in opzioni) FilterChip(valore == v, { scegli(if (valore == v) null else v) }, label = { Text(nome) })
@@ -667,12 +667,19 @@ fun DialogoScegliPersona(
 @Composable
 fun SchermataPersone(vm: AppVM, apri: (Long) -> Unit) {
     val persone by vm.persone.collectAsStateWithLifecycle()
+    val foto by vm.foto.collectAsStateWithLifecycle()
     val av by vm.avanzamento.collectAsStateWithLifecycle()
     var tutte by remember { mutableStateOf(false) }
     var cerca by remember { mutableStateOf("") }
+    var conNome by remember { mutableStateOf<Boolean?>(null) }   // null = tutti
+    var filtri by remember { mutableStateOf(Filtri()) }
+    var pannello by remember { mutableStateOf(false) }
+    val profili = remember(foto) { profiliPersone(foto) }
     val q = Testo.normalizza(cerca)
     val visibili = persone.filter { tutte || (!it.nascosta && (it.nome != null || it.foto >= 2)) }
         .filter { q.isEmpty() || it.nome?.let { n -> Testo.normalizza(n).contains(q) } == true }
+        .filter { conNome == null || (it.nome != null) == conNome }
+        .filter { p -> filtri.attivi == 0 || profili[p.id]?.let { filtri.okVolto(it) } == true }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Text("Persone", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 0.dp))
         Text(
@@ -682,12 +689,21 @@ fun SchermataPersone(vm: AppVM, apri: (Long) -> Unit) {
         OutlinedTextField(cerca, { cerca = it }, Modifier.fillMaxWidth().padding(12.dp, 4.dp), singleLine = true,
             placeholder = { Text("Cerca un nome") }, leadingIcon = { Icon(Icons.Default.Search, null) },
             trailingIcon = { if (cerca.isNotEmpty()) IconButton({ cerca = "" }) { Icon(Icons.Default.Close, "Cancella") } })
-        Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            FilterChip(tutte, { tutte = !tutte }, label = { Text("Mostra anche volti singoli e nascosti") })
+        LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            item { FilterChip(conNome == false, { conNome = if (conNome == false) null else false }, label = { Text("Senza nome") }) }
+            item { FilterChip(conNome == true, { conNome = if (conNome == true) null else true }, label = { Text("Con nome") }) }
+            item {
+                FilterChip(filtri.attivi > 0, { pannello = true },
+                    label = { Text(if (filtri.attivi > 0) descriviFiltri(filtri).joinToString(", ") { it.first } else "Sesso, età, capelli…") },
+                    trailingIcon = { if (filtri.attivi > 0) Icon(Icons.Default.Close, "Togli", Modifier.size(16.dp).clickable { filtri = Filtri() }) })
+            }
+            item { FilterChip(tutte, { tutte = !tutte }, label = { Text("Anche volti singoli e nascosti") }) }
         }
+        Text("${visibili.size} gruppi", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(16.dp, 4.dp))
         if (av.attivo && av.fase == "volti") Text("Sto raggruppando i volti…", Modifier.padding(16.dp, 4.dp))
         if (visibili.isEmpty()) {
-            Text("Nessun gruppo ancora: i volti compaiono qui dopo l'indicizzazione.", Modifier.padding(16.dp))
+            Text(if (persone.isEmpty()) "Nessun gruppo ancora: i volti compaiono qui dopo l'indicizzazione." else "Nessun gruppo con questi filtri.",
+                Modifier.padding(16.dp))
         }
         LazyVerticalGrid(GridCells.Adaptive(104.dp), Modifier.fillMaxSize(), contentPadding = PaddingValues(8.dp)) {
             items(visibili, key = { it.id }) { p ->
@@ -704,6 +720,39 @@ fun SchermataPersone(vm: AppVM, apri: (Long) -> Unit) {
             }
         }
     }
+    if (pannello) DialogoFiltriPersona(filtri, { filtri = it }) { pannello = false }
+}
+
+/** Profilo medio di ogni gruppo (età mediana, sesso medio, capelli e abiti più frequenti) dai volti affidabili */
+fun profiliPersone(foto: List<FotoIdx>): Map<Long, VoltoAttr> {
+    val per = HashMap<Long, MutableList<VoltoAttr>>()
+    for (f in foto) for (a in f.attr) if (a.persona > 0) per.getOrPut(a.persona) { mutableListOf() }.add(a)
+    return per.mapValues { (id, l) ->
+        val buoni = l.filter { it.affidabile }.ifEmpty { l }
+        val eta = buoni.map { it.eta }.sorted().let { it[it.size / 2] }
+        val maschio = buoni.map { it.maschio }.average().toFloat()
+        val capelli = l.mapNotNull { it.capelli }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
+        VoltoAttr(id, eta, maschio, capelli, null, buoni.maxOf { it.area })
+    }
+}
+
+@Composable
+fun DialogoFiltriPersona(iniziali: Filtri, applica: (Filtri) -> Unit, chiudi: () -> Unit) {
+    var f by remember { mutableStateOf(iniziali) }
+    AlertDialog(
+        onDismissRequest = chiudi,
+        title = { Text("Filtra i gruppi") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Valori stimati su tutti i volti del gruppo.", style = MaterialTheme.typography.bodySmall)
+                Scelte("Sesso", listOf("donna" to "Donna", "uomo" to "Uomo"), f.sesso) { f = f.copy(sesso = it) }
+                Scelte("Età", NOMI_ETA.toList(), f.eta) { f = f.copy(eta = it) }
+                Scelte("Capelli", NOMI_CAPELLI.toList(), f.capelli) { f = f.copy(capelli = it) }
+            }
+        },
+        confirmButton = { TextButton({ applica(f); chiudi() }) { Text("Applica") } },
+        dismissButton = { TextButton({ applica(Filtri()); chiudi() }) { Text("Azzera") } },
+    )
 }
 
 @Composable
@@ -744,6 +793,39 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
             OutlinedButton({ dialogoNome = true }) { Text(if (p.nome == null) "Dai un nome" else "Rinomina") }
             OutlinedButton({ dialogoUnisci = true }) { Text("Unisci a…") }
             OutlinedButton({ vm.nascondi(p.id, !p.nascosta) }) { Text(if (p.nascosta) "Mostra" else "Nascondi") }
+        }
+        var simili by remember(p.id, persone.size) { mutableStateOf<Map<Long, Float>>(emptyMap()) }
+        LaunchedEffect(p.id, persone.size) { simili = vm.somiglianze(p.id) }
+        var daUnire by remember { mutableStateOf<Persona?>(null) }
+        val candidati = persone.filter { it.id != p.id && it.nome == null && (simili[it.id] ?: 0f) >= 0.45f }
+            .sortedByDescending { simili[it.id] }.take(12)
+        if (candidati.isNotEmpty()) {
+            Text("Potrebbe essere anche… (tocca per unire)", style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(16.dp, 8.dp, 16.dp, 2.dp))
+            LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                items(candidati, key = { it.id }) { o ->
+                    Column(Modifier.width(72.dp).clickable { daUnire = o }, horizontalAlignment = Alignment.CenterHorizontally) {
+                        VoltoMini(o, 56.dp)
+                        Text("${((simili[o.id] ?: 0f) * 100).toInt()}% · ${o.foto}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+        daUnire?.let { o ->
+            val anteprima = remember(foto, o.id) { foto.filter { o.id in it.persone }.take(9) }
+            AlertDialog(
+                onDismissRequest = { daUnire = null },
+                title = { Text("È ${p.nome ?: "questa persona"}?") },
+                text = {
+                    Column {
+                        Text("Gruppo senza nome con ${o.foto} foto, somiglianza ${((simili[o.id] ?: 0f) * 100).toInt()}%.")
+                        Spacer(Modifier.height(8.dp))
+                        GrigliaFoto(anteprima, Modifier.heightIn(max = 300.dp)) {}
+                    }
+                },
+                confirmButton = { TextButton({ vm.unisci(p.id, o.id); daUnire = null }) { Text("Sì, unisci") } },
+                dismissButton = { TextButton({ daUnire = null }) { Text("No") } },
+            )
         }
         Text("Tieni premuta una foto se la persona è sbagliata.", style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(16.dp, 6.dp))
