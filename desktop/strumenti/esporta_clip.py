@@ -28,7 +28,7 @@ torch.onnx.export(t, (enc["input_ids"], enc["attention_mask"]), f"{OUT}/clip_tes
                   input_names=["input_ids", "attention_mask"], output_names=["emb"],
                   dynamic_axes={"input_ids": {0: "b", 1: "n"}, "attention_mask": {0: "b", 1: "n"}, "emb": {0: "b"}}, opset_version=17)
 
-clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32").eval()
+clip = CLIPModel.from_pretrained("openai/clip-vit-base-patch32", attn_implementation="eager").eval()
 proc = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 class Img(nn.Module):
     def __init__(s): super().__init__(); s.m = clip
