@@ -1011,6 +1011,8 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
     val versione = remember { BuildConfig.VERSION_NAME }
     val cartelle by vm.cartelle.collectAsStateWithLifecycle()
     val sceltaCartella = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { u -> u?.let { vm.aggiungiCartella(it) } }
+    val esporta = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { u -> u?.let { vm.esporta(it) } }
+    val importa = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u -> u?.let { vm.importa(it) } }
 
     LaunchedEffect(av.attivo) { vm.ricarica() }
 
@@ -1101,6 +1103,19 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
                 }
                 OutlinedButton({ sceltaCartella.launch(null) }) { Text("Aggiungi cartella o unità esterna") }
                 Text("Se scolleghi l'unità, le sue foto restano cercabili; per aprirle va ricollegata.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Scambio con Cerca Foto per Windows", fontWeight = FontWeight.Bold)
+                Text("Esporta un file con le persone a cui hai dato un nome e le tue correzioni (niente foto). " +
+                    "Importandolo sull'altro dispositivo, le stesse persone vengono riconosciute anche lì. Funziona nei due sensi.",
+                    style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton({ esporta.launch("persone.cercafoto") }, enabled = !av.attivo) { Text("Esporta") }
+                    OutlinedButton({ importa.launch(arrayOf("*/*")) }, enabled = !av.attivo) { Text("Importa") }
+                }
             }
         }
 

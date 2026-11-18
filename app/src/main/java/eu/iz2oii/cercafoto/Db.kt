@@ -67,7 +67,7 @@ fun ByteArray.toFloats(): FloatArray {
     return FloatArray(size / 4) { bb.getFloat() }
 }
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 3) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 4) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -98,7 +98,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         db.execSQL("CREATE INDEX volto_foto ON volto(foto_id)")
         db.execSQL("CREATE INDEX volto_persona ON volto(persona_id)")
         db.execSQL("CREATE TABLE persona(id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, copertina INTEGER, foto INTEGER DEFAULT 0, nascosta INTEGER DEFAULT 0)")
-        onUpgrade(db, 1, 3)
+        onUpgrade(db, 1, 4)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {
@@ -117,6 +117,11 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         if (o < 3) {
             // associazioni foto-persona fatte a mano, senza volto visibile
             db.execSQL("ALTER TABLE volto ADD COLUMN manuale INTEGER DEFAULT 0")
+        }
+        if (o < 4) {
+            // scambio con l'app Windows: identificativo stabile delle persone e impronta dei file
+            db.execSQL("ALTER TABLE persona ADD COLUMN uid TEXT")
+            db.execSQL("ALTER TABLE foto ADD COLUMN sha TEXT")
         }
     }
 
@@ -500,7 +505,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
     fun ricontaInterno(db: SQLiteDatabase) {
         db.execSQL("UPDATE persona SET foto = (SELECT COUNT(DISTINCT foto_id) FROM volto WHERE persona_id = persona.id)")
         db.execSQL("UPDATE persona SET copertina = (SELECT id FROM volto WHERE persona_id = persona.id ORDER BY manuale, area DESC LIMIT 1) WHERE copertina IS NULL OR copertina NOT IN (SELECT id FROM volto WHERE persona_id = persona.id)")
-        db.execSQL("DELETE FROM persona WHERE foto = 0")
+        // i gruppi senza nome rimasti vuoti spariscono; le persone con nome restano (servono per lo scambio con Windows)
+        db.execSQL("DELETE FROM persona WHERE foto = 0 AND (nome IS NULL OR nome = '')")
     }
 
     /** Salva le correzioni manuali delle etichette di una foto */

@@ -137,6 +137,24 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         }.getOrDefault(emptyMap())
     }
 
+    fun esporta(uri: android.net.Uri) {
+        val ctx = getApplication<Application>()
+        sfondo("Esportazione…") {
+            val (p, f) = ctx.contentResolver.openOutputStream(uri)!!.use { out -> Scambio.esporta(ctx, out) { lavoro.value = it } }
+            "Esportate $p persone e le correzioni di ${foto(f)}"
+        }
+    }
+
+    fun importa(uri: android.net.Uri) {
+        val ctx = getApplication<Application>()
+        sfondo("Importazione…") {
+            val e = ctx.contentResolver.openInputStream(uri)!!.use { inp -> Scambio.importa(ctx, inp) { lavoro.value = it } }
+            "Importate ${e.persone} persone (${e.nuove} nuove), correzioni su ${foto(e.foto)}" +
+                (if (e.fotoNonTrovate > 0) " (${e.fotoNonTrovate} non presenti qui)" else "") +
+                ", ${e.voltiRiconosciuti} volti riconosciuti"
+        }
+    }
+
     fun rimuoviAssociazione(voltoId: Long) = op { db.rimuoviVolto(voltoId); messaggio.value = "Foto tolta dalla persona" }
 
     fun nuovaPersonaDaVolto(voltoId: Long, nome: String) = op {
