@@ -64,11 +64,11 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
         private const val CANALE = "indice"
         private const val NOTIFICA = 42
 
-        fun avvia(ctx: Context, sostituisci: Boolean = false) {
+        fun avvia(ctx: Context, sostituisci: Boolean = false, rianalisiVolti: Boolean = false) {
             WorkManager.getInstance(ctx).enqueueUniqueWork(
                 NOME,
-                if (sostituisci) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
-                OneTimeWorkRequestBuilder<Indicizzatore>().build()
+                if (sostituisci || rianalisiVolti) ExistingWorkPolicy.REPLACE else ExistingWorkPolicy.KEEP,
+                OneTimeWorkRequestBuilder<Indicizzatore>().setInputData(workDataOf("rianalisi_volti" to rianalisiVolti)).build()
             )
         }
 
@@ -162,8 +162,8 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
 
     override suspend fun getForegroundInfo(): ForegroundInfo = foreground("Preparazione…", 0, 0)
 
-    private fun carica(uri: Uri): Bitmap {
-        var bmp = ctx.contentResolver.loadThumbnail(uri, Size(1280, 1280), null)
+    private fun carica(uri: Uri, lato: Int = 1280): Bitmap {
+        var bmp = ctx.contentResolver.loadThumbnail(uri, Size(lato, lato), null)
         if (bmp.config != Bitmap.Config.ARGB_8888) {
             val c = bmp.copy(Bitmap.Config.ARGB_8888, false); bmp.recycle(); bmp = c
         }
@@ -174,6 +174,31 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
         runCatching { setForeground(foreground("Lettura galleria…", 0, 0)) }
         val db = Db.get(ctx)
         val nm = ctx.getSystemService(NotificationManager::class.java)
+
+        // Rianalisi approfondita dei soli volti senza nome: alta risoluzione e volti più piccoli
+        if (inputData.getBoolean("rianalisi_volti", false)) {
+            val lista = db.fotoConVoltiSenzaNome()
+            Analizzatore(ctx, false, minVolto = 0.025f).use { an ->
+                for ((i, f) in lista.withIndex()) {
+                    if (isStopped) break
+                    runCatching {
+                        val bmp = carica(f.second, 2560)
+                        val (volti, sorriso) = an.volti(bmp)
+                        bmp.recycle()
+                        db.sostituisciVolti(f.first, volti, sorriso)
+                    }
+                    if (i % 5 == 0 || i == lista.size - 1) {
+                        setProgress(workDataOf("fase" to "volti_hd", "fatte" to i + 1, "totale" to lista.size))
+                        runCatching { nm.notify(NOTIFICA, notifica("Volti in alta risoluzione: ${i + 1} di ${lista.size}", i + 1, lista.size)) }
+                    }
+                }
+            }
+            if (isStopped) return@withContext Result.success()
+            setProgress(workDataOf("fase" to "volti", "fatte" to 0, "totale" to 0))
+            runCatching { nm.notify(NOTIFICA, notifica("Raggruppo i volti…", 0, 0)) }
+            Raggruppa.esegui(ctx)
+            return@withContext Result.success()
+        }
 
         // Elenco foto: galleria + cartelle esterne raggiungibili
         val galleria = ArrayList(leggiGalleria(ctx))

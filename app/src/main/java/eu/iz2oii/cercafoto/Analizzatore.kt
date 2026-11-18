@@ -22,7 +22,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /** Tutta l'analisi avviene sul telefono: ML Kit (modelli inclusi nell'APK) + FaceNet TFLite. */
-class Analizzatore(ctx: Context, ocr: Boolean) : Closeable {
+class Analizzatore(ctx: Context, ocr: Boolean, minVolto: Float = 0.05f) : Closeable {
 
     class Volto(val l: Float, val t: Float, val r: Float, val b: Float, val emb: FloatArray?, val attr: Attributi?)
     class Risultato(
@@ -43,7 +43,7 @@ class Analizzatore(ctx: Context, ocr: Boolean) : Closeable {
         FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
             .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
-            .setMinFaceSize(0.05f)
+            .setMinFaceSize(minVolto)
             .build()
     )
     private val testo = if (ocr) TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) else null
@@ -69,6 +69,13 @@ class Analizzatore(ctx: Context, ocr: Boolean) : Closeable {
     fun analizza(bmp: Bitmap): Risultato {
         val img = InputImage.fromBitmap(bmp, 0)
         val et = Tasks.await(labeler.process(img)).map { it.text to (it.confidence * 100).roundToInt() }
+        val (volti, sorriso) = volti(bmp, img)
+        val txt = testo?.let { runCatching { Tasks.await(it.process(img)).text }.getOrDefault("") } ?: ""
+        return Risultato(et, volti, sorriso, txt, colori(bmp))
+    }
+
+    /** Solo i volti (rilevamento, vettore FaceNet, attributi) e il sorriso massimo */
+    fun volti(bmp: Bitmap, img: InputImage = InputImage.fromBitmap(bmp, 0)): Pair<List<Volto>, Float> {
         val fs = Tasks.await(faces.process(img))
         var sorriso = 0f
         val volti = fs.mapNotNull { f ->
@@ -88,8 +95,7 @@ class Analizzatore(ctx: Context, ocr: Boolean) : Closeable {
             val nr = r / bmp.width.toFloat(); val nb = b / bmp.height.toFloat()
             Volto(nl, nt, nr, nb, emb, attributi(bmp, nl, nt, nr, nb))
         }
-        val txt = testo?.let { runCatching { Tasks.await(it.process(img)).text }.getOrDefault("") } ?: ""
-        return Risultato(et, volti, sorriso, txt, colori(bmp))
+        return volti to sorriso
     }
 
     override fun close() {

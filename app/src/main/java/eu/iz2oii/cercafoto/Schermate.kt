@@ -700,7 +700,21 @@ fun SchermataPersone(vm: AppVM, apri: (Long) -> Unit) {
             item { FilterChip(tutte, { tutte = !tutte }, label = { Text("Anche volti singoli e nascosti") }) }
         }
         Text("${visibili.size} gruppi", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(16.dp, 4.dp))
-        if (av.attivo && av.fase == "volti") Text("Sto raggruppando i volti…", Modifier.padding(16.dp, 4.dp))
+        val ricalcolo by vm.ricalcolo.collectAsStateWithLifecycle()
+        var riorganizza by remember { mutableStateOf(false) }
+        when {
+            av.attivo && av.fase == "volti" || ricalcolo -> Row(Modifier.padding(16.dp, 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(Modifier.size(16.dp)); Text("  Sto raggruppando i volti…")
+            }
+            av.attivo && av.fase == "volti_hd" && av.totale > 0 -> Column(Modifier.padding(16.dp, 4.dp)) {
+                Text("Rianalisi volti in alta risoluzione: ${av.fatte} di ${av.totale}", style = MaterialTheme.typography.bodySmall)
+                LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
+            }
+            else -> TextButton({ riorganizza = true }, Modifier.padding(horizontal = 8.dp), enabled = !av.attivo) {
+                Text("Riorganizza volti senza nome…")
+            }
+        }
+        if (riorganizza) DialogoRiorganizza(vm) { riorganizza = false }
         if (visibili.isEmpty()) {
             Text(if (persone.isEmpty()) "Nessun gruppo ancora: i volti compaiono qui dopo l'indicizzazione." else "Nessun gruppo con questi filtri.",
                 Modifier.padding(16.dp))
@@ -734,6 +748,42 @@ fun profiliPersone(foto: List<FotoIdx>): Map<Long, VoltoAttr> {
         val capelli = l.mapNotNull { it.capelli }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
         VoltoAttr(id, eta, maschio, capelli, null, buoni.maxOf { it.area })
     }
+}
+
+@Composable
+fun DialogoRiorganizza(vm: AppVM, chiudi: () -> Unit) {
+    val ctx = LocalContext.current
+    var soglia by remember { mutableFloatStateOf(Impostazioni.soglia(ctx)) }
+    AlertDialog(
+        onDismissRequest = chiudi,
+        title = { Text("Riorganizza volti senza nome") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("Le persone con nome e i volti che hai tolto a mano non vengono toccati.", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(10.dp))
+                Text("Severità del riconoscimento", fontWeight = FontWeight.Bold)
+                Slider(soglia, { soglia = it }, valueRange = 0.35f..0.75f)
+                Row {
+                    Text("Permissivo: unisce di più", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    Text("Severo: separa di più", style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(12.dp))
+                Text("Veloce", fontWeight = FontWeight.Bold)
+                Text("Riconfronta i volti senza nome con le persone che hai già nominato e ricompone i gruppi. Qualche secondo.",
+                    style = MaterialTheme.typography.bodySmall)
+                Button({ Impostazioni.setSoglia(ctx, soglia); vm.ricalcolaGruppi(); chiudi() }) { Text("Riorganizza ora") }
+                Spacer(Modifier.height(12.dp))
+                Text("Approfondita", fontWeight = FontWeight.Bold)
+                Text("Riapre in alta risoluzione le foto con volti senza nome: trova anche volti piccoli o di sfondo e li riconosce meglio. " +
+                    "Può richiedere parecchio tempo; continua in background con una notifica.", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton({ Impostazioni.setSoglia(ctx, soglia); Indicizzatore.avvia(ctx, rianalisiVolti = true); chiudi() }) {
+                    Text("Rianalizza in alta risoluzione")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(chiudi) { Text("Chiudi") } },
+    )
 }
 
 @Composable
@@ -901,6 +951,10 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 when {
                     av.attivo && av.fase == "volti" -> { Text("Raggruppo i volti…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                    av.attivo && av.fase == "volti_hd" && av.totale > 0 -> {
+                        Text("Rianalisi volti in alta risoluzione: ${av.fatte} di ${av.totale}")
+                        LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
+                    }
                     av.attivo && av.fase == "completamento" && av.totale > 0 -> {
                         Text("Aggiorno le foto già analizzate (colori, età, capelli, abiti): ${av.fatte} di ${av.totale}")
                         LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())

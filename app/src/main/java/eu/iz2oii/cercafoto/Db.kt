@@ -9,6 +9,8 @@ import android.net.Uri
 import android.provider.MediaStore
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.max
+import kotlin.math.min
 
 /** Foto indicizzata, in forma leggera per la ricerca in memoria. */
 /** Attributi stimati di un volto (età, sesso apparente, colore capelli e abiti) */
@@ -270,6 +272,61 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             n("SELECT COUNT(*) FROM volto"),
             n("SELECT COUNT(*) FROM persona WHERE foto >= 2 OR (nome IS NOT NULL AND nome <> '')")
         )
+    }
+
+    /** Foto che contengono almeno un volto non assegnato a una persona con nome (esclusi quelli tolti a mano) */
+    fun fotoConVoltiSenzaNome(): List<Pair<Long, Uri>> {
+        val out = ArrayList<Pair<Long, Uri>>()
+        readableDatabase.rawQuery(
+            "SELECT DISTINCT f.id, f.uri FROM volto v JOIN foto f ON f.id = v.foto_id WHERE v.persona_id <> $ESCLUSO AND " +
+                "v.persona_id NOT IN (SELECT id FROM persona WHERE nome IS NOT NULL AND nome <> '') ORDER BY f.data DESC", null
+        ).use { c -> while (c.moveToNext()) out += c.getLong(0) to uriDi(c.getLong(0), c.getString(1)) }
+        return out
+    }
+
+    /**
+     * Sostituisce i volti di una foto con quelli di una nuova analisi.
+     * Le assegnazioni a persone con nome e le esclusioni manuali passano al nuovo volto nella stessa posizione.
+     */
+    fun sostituisciVolti(fotoId: Long, volti: List<Analizzatore.Volto>, sorriso: Float) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            class Vecchio(val l: Float, val t: Float, val r: Float, val b: Float, val p: Long)
+            val tenere = ArrayList<Vecchio>()
+            db.rawQuery(
+                "SELECT l, t, r, b, persona_id FROM volto WHERE foto_id = ? AND (persona_id = $ESCLUSO OR persona_id IN " +
+                    "(SELECT id FROM persona WHERE nome IS NOT NULL AND nome <> ''))", arrayOf(fotoId.toString())
+            ).use { c -> while (c.moveToNext()) tenere += Vecchio(c.getFloat(0), c.getFloat(1), c.getFloat(2), c.getFloat(3), c.getLong(4)) }
+            fun iou(a: Vecchio, v: Analizzatore.Volto): Float {
+                val il = max(a.l, v.l); val itop = max(a.t, v.t); val ir = min(a.r, v.r); val ib = min(a.b, v.b)
+                val inter = max(0f, ir - il) * max(0f, ib - itop)
+                val uni = (a.r - a.l) * (a.b - a.t) + (v.r - v.l) * (v.b - v.t) - inter
+                return if (uni > 0f) inter / uni else 0f
+            }
+            db.delete("volto", "foto_id=?", arrayOf(fotoId.toString()))
+            val usati = HashSet<Vecchio>()
+            for (v in volti) {
+                val match = tenere.filter { it !in usati }.maxByOrNull { iou(it, v) }?.takeIf { iou(it, v) >= 0.35f }
+                match?.let { usati += it }
+                db.insert("volto", null, ContentValues().apply {
+                    put("foto_id", fotoId); put("l", v.l); put("t", v.t); put("r", v.r); put("b", v.b)
+                    put("area", (v.r - v.l) * (v.b - v.t))
+                    if (v.emb != null) put("emb", v.emb.toBlob())
+                    v.attr?.let { putAll(it.valori()) }
+                    put("persona_id", match?.p ?: 0L)
+                })
+            }
+            // volti con nome non ritrovati dalla nuova analisi: si tengono com'erano
+            for (o in tenere) if (o !in usati) db.insert("volto", null, ContentValues().apply {
+                put("foto_id", fotoId); put("l", o.l); put("t", o.t); put("r", o.r); put("b", o.b)
+                put("area", (o.r - o.l) * (o.b - o.t)); put("persona_id", o.p)
+            })
+            db.update("foto", ContentValues().apply {
+                put("volti", volti.size.coerceAtLeast(tenere.size)); put("sorriso", sorriso)
+            }, "id=?", arrayOf(fotoId.toString()))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     fun voltiFoto(fotoId: Long): List<VoltoInfo> {
