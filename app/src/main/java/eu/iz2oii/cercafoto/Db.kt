@@ -269,6 +269,20 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         )
     }
 
+    /** Centro (media normalizzata dei vettori dei volti) di ogni persona */
+    fun centri(): HashMap<Long, FloatArray> {
+        val somme = HashMap<Long, FloatArray>()
+        readableDatabase.rawQuery("SELECT persona_id, emb FROM volto WHERE persona_id > 0 AND emb IS NOT NULL", null).use { c ->
+            while (c.moveToNext()) {
+                val e = c.getBlob(1).toFloats()
+                val s = somme.getOrPut(c.getLong(0)) { FloatArray(e.size) }
+                for (i in e.indices) s[i] += e[i]
+            }
+        }
+        somme.values.forEach { normalizza(it) }
+        return somme
+    }
+
     fun rinomina(id: Long, nome: String) {
         writableDatabase.update("persona", ContentValues().apply { put("nome", nome.trim().ifBlank { null }) }, "id=?", arrayOf(id.toString()))
     }

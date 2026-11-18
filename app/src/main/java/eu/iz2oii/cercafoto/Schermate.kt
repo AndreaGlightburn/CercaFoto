@@ -544,13 +544,19 @@ fun SchermataPersone(vm: AppVM, apri: (Long) -> Unit) {
     val persone by vm.persone.collectAsStateWithLifecycle()
     val av by vm.avanzamento.collectAsStateWithLifecycle()
     var tutte by remember { mutableStateOf(false) }
+    var cerca by remember { mutableStateOf("") }
+    val q = Testo.normalizza(cerca)
     val visibili = persone.filter { tutte || (!it.nascosta && (it.nome != null || it.foto >= 2)) }
+        .filter { q.isEmpty() || it.nome?.let { n -> Testo.normalizza(n).contains(q) } == true }
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Text("Persone", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(16.dp, 12.dp, 16.dp, 0.dp))
         Text(
             "Volti raggruppati automaticamente. Tocca un gruppo per dargli un nome: poi potrai cercarlo nella scheda Cerca.",
             style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(16.dp, 4.dp)
         )
+        OutlinedTextField(cerca, { cerca = it }, Modifier.fillMaxWidth().padding(12.dp, 4.dp), singleLine = true,
+            placeholder = { Text("Cerca un nome") }, leadingIcon = { Icon(Icons.Default.Search, null) },
+            trailingIcon = { if (cerca.isNotEmpty()) IconButton({ cerca = "" }) { Icon(Icons.Default.Close, "Cancella") } })
         Row(Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             FilterChip(tutte, { tutte = !tutte }, label = { Text("Mostra anche volti singoli e nascosti") })
         }
@@ -571,6 +577,19 @@ fun SchermataPersone(vm: AppVM, apri: (Long) -> Unit) {
                     Text("${p.foto} foto" + if (p.nascosta) " · nascosta" else "", style = MaterialTheme.typography.bodySmall)
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun RigaPersona(o: Persona, somiglianza: Float?, scegli: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = scegli).padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        VoltoMini(o, 44.dp)
+        Column(Modifier.padding(start = 12.dp).weight(1f)) {
+            Text(o.nome ?: "Senza nome", fontWeight = if (o.nome != null) FontWeight.Bold else FontWeight.Normal,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text("${o.foto} foto" + (somiglianza?.takeIf { it > 0f }?.let { " · somiglianza ${(it * 100).toInt()}%" } ?: ""),
+                style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -608,28 +627,62 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
 
     if (dialogoNome) {
         var testo by remember { mutableStateOf(p.nome ?: "") }
+        val q = Testo.normalizza(testo)
+        val uguali = if (q.length < 2) emptyList() else
+            persone.filter { it.id != p.id && it.nome != null && Testo.normalizza(it.nome).contains(q) }.take(5)
         AlertDialog(
             onDismissRequest = { dialogoNome = false },
             title = { Text("Nome della persona") },
-            text = { OutlinedTextField(testo, { testo = it }, singleLine = true, placeholder = { Text("es. Mario") }) },
-            confirmButton = { TextButton({ vm.rinomina(p.id, testo); dialogoNome = false }) { Text("Salva") } },
+            text = {
+                Column {
+                    OutlinedTextField(testo, { testo = it }, singleLine = true, placeholder = { Text("es. Mario") })
+                    if (uguali.isNotEmpty()) {
+                        Text("Esiste già? Tocca per unire questo gruppo:", style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 8.dp))
+                        for (o in uguali) RigaPersona(o, null) { vm.unisci(o.id, p.id); dialogoNome = false }
+                    }
+                }
+            },
+            confirmButton = { TextButton({ vm.rinomina(p.id, testo); dialogoNome = false }) { Text("Salva come nuovo nome") } },
             dismissButton = { TextButton({ dialogoNome = false }) { Text("Annulla") } },
         )
     }
     if (dialogoUnisci) {
+        var cerca by remember { mutableStateOf("") }
+        var simili by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
+        LaunchedEffect(p.id) { simili = vm.somiglianze(p.id) }
+        val q = Testo.normalizza(cerca)
         val altre = persone.filter { it.id != p.id && (it.nome != null || it.foto >= 2) }
+        val trovate = if (q.isEmpty()) emptyList() else altre.filter { o -> o.nome?.let { Testo.normalizza(it).contains(q) } == true }
+        val suggerite = altre.filter { (simili[it.id] ?: 0f) >= 0.35f }.sortedByDescending { simili[it.id] }.take(6)
+        val nominate = altre.filter { it.nome != null }.sortedBy { Testo.normalizza(it.nome!!) }
+        val senzaNome = altre.filter { it.nome == null }.sortedByDescending { simili[it.id] ?: 0f }
         AlertDialog(
             onDismissRequest = { dialogoUnisci = false },
             title = { Text("È la stessa persona di…") },
             text = {
-                LazyColumn(Modifier.heightIn(max = 420.dp)) {
-                    items(altre, key = { it.id }) { o ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { vm.unisci(p.id, o.id); dialogoUnisci = false }.padding(6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            VoltoMini(o, 44.dp)
-                            Text((o.nome ?: "Senza nome") + " · ${o.foto} foto", Modifier.padding(start = 12.dp))
+                Column {
+                    OutlinedTextField(cerca, { cerca = it }, Modifier.fillMaxWidth(), singleLine = true,
+                        placeholder = { Text("Cerca un nome") }, leadingIcon = { Icon(Icons.Default.Search, null) },
+                        trailingIcon = { if (cerca.isNotEmpty()) IconButton({ cerca = "" }) { Icon(Icons.Default.Close, "Cancella") } })
+                    LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                        fun sezione(titolo: String, lista: List<Persona>, chiave: String) {
+                            if (lista.isEmpty()) return
+                            item(key = "t$chiave") {
+                                Text(titolo, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge,
+                                    modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
+                            }
+                            items(lista, key = { "$chiave${it.id}" }) { o ->
+                                RigaPersona(o, simili[o.id]) { vm.unisci(p.id, o.id); dialogoUnisci = false }
+                            }
+                        }
+                        if (q.isNotEmpty()) {
+                            sezione("Risultati", trovate, "r")
+                            if (trovate.isEmpty()) item { Text("Nessun nome trovato.", Modifier.padding(8.dp)) }
+                        } else {
+                            sezione("Più somiglianti", suggerite, "s")
+                            sezione("Con nome (A-Z)", nominate, "n")
+                            sezione("Senza nome", senzaNome, "x")
                         }
                     }
                 }

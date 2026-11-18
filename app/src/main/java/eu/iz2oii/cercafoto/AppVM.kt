@@ -82,6 +82,15 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     }
 
     fun rinomina(id: Long, nome: String) = op { db.rinomina(id, nome) }
+
+    /** Somiglianza (0..1) di ogni altra persona rispetto a [id], dai vettori dei volti */
+    suspend fun somiglianze(id: Long): Map<Long, Float> = withContext(Dispatchers.IO) {
+        runCatching {
+            val c = db.centri()
+            val mio = c[id] ?: return@runCatching emptyMap<Long, Float>()
+            c.filterKeys { it != id }.mapValues { dot(mio, it.value).coerceIn(0f, 1f) }
+        }.getOrDefault(emptyMap())
+    }
     fun nascondi(id: Long, s: Boolean) = op { db.nascondi(id, s) }
     fun unisci(dest: Long, src: Long) = op { db.unisci(dest, src) }
     fun escludi(fotoId: Long, personaId: Long) = op { db.escludi(fotoId, personaId) }
