@@ -458,6 +458,35 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         return id
     }
 
+    /** Sposta i volti (e i collegamenti a mano) di [da] nelle foto indicate verso la persona [a] */
+    fun spostaFoto(fotoIds: List<Long>, da: Long, a: Long) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            for (f in fotoIds) {
+                // se la foto è già collegata a mano alla destinazione, il collegamento doppio si toglie
+                db.delete("volto", "foto_id = ? AND persona_id = ? AND manuale = 1 AND EXISTS (SELECT 1 FROM volto x WHERE x.foto_id = ? AND x.persona_id = ?)",
+                    arrayOf(f.toString(), da.toString(), f.toString(), a.toString()))
+                db.execSQL("UPDATE volto SET persona_id = ? WHERE foto_id = ? AND persona_id = ?", arrayOf<Any>(a, f, da))
+            }
+            ricontaInterno(db)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    fun nuovaPersonaDaFoto(fotoIds: List<Long>, da: Long, nome: String) {
+        val id = writableDatabase.insert("persona", null, ContentValues().apply { put("nome", nome.trim()) })
+        spostaFoto(fotoIds, da, id)
+    }
+
+    /** Vettori dei volti di [personaId] nelle foto indicate */
+    fun vettoriFotoPersona(fotoIds: List<Long>, personaId: Long): List<FloatArray> {
+        val out = ArrayList<FloatArray>()
+        for (f in fotoIds) readableDatabase.rawQuery("SELECT emb FROM volto WHERE foto_id = ? AND persona_id = ? AND emb IS NOT NULL",
+            arrayOf(f.toString(), personaId.toString())).use { c -> while (c.moveToNext()) out += c.getBlob(0).toFloats() }
+        return out
+    }
+
     fun rimuoviVolto(voltoId: Long) {
         val db = writableDatabase
         db.beginTransaction()

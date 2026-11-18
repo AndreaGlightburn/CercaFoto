@@ -111,6 +111,32 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         db.nuovaPersonaConFoto(lista.map { it.id }, nome); messaggio.value = "Creata la persona «${nome.trim()}» con ${foto(lista.size)}"
     }
 
+    fun spostaFoto(lista: List<Long>, da: Long, a: Persona) = op {
+        db.spostaFoto(lista, da, a.id)
+        messaggio.value = "Spostate ${foto(lista.size)} in «${a.nome ?: "gruppo senza nome"}»" +
+            if (a.nome == null) ". Dai un nome al gruppo perché resti anche dopo un ricalcolo." else ""
+    }
+
+    fun nuovaPersonaDaFoto(lista: List<Long>, da: Long, nome: String) = op {
+        db.nuovaPersonaDaFoto(lista, da, nome); messaggio.value = "Spostate ${foto(lista.size)} nella nuova persona «${nome.trim()}»"
+    }
+
+    fun escludiFoto(lista: List<Long>, persona: Long) = op {
+        for (f in lista) db.escludi(f, persona); messaggio.value = "Tolte ${foto(lista.size)} dal gruppo"
+    }
+
+    /** Somiglianza delle persone rispetto ai volti selezionati (media dei vettori) */
+    suspend fun somiglianzeFoto(lista: List<Long>, persona: Long): Map<Long, Float> = withContext(Dispatchers.IO) {
+        runCatching {
+            val v = db.vettoriFotoPersona(lista, persona)
+            if (v.isEmpty()) return@runCatching emptyMap<Long, Float>()
+            val m = FloatArray(v[0].size)
+            for (e in v) for (i in e.indices) m[i] += e[i]
+            normalizza(m)
+            db.centri().filterKeys { it != persona }.mapValues { dot(m, it.value).coerceIn(0f, 1f) }
+        }.getOrDefault(emptyMap())
+    }
+
     fun rimuoviAssociazione(voltoId: Long) = op { db.rimuoviVolto(voltoId); messaggio.value = "Foto tolta dalla persona" }
 
     fun nuovaPersonaDaVolto(voltoId: Long, nome: String) = op {

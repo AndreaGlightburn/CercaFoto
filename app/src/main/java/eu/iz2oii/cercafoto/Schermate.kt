@@ -865,7 +865,10 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
     val sue = remember(foto, id) { foto.filter { id in it.persone } }
     var dialogoNome by remember { mutableStateOf(false) }
     var dialogoUnisci by remember { mutableStateOf(false) }
-    var daEscludere by remember { mutableStateOf<FotoIdx?>(null) }
+    var sel by remember(id) { mutableStateOf(setOf<Long>()) }
+    var confermaTogli by remember { mutableStateOf(false) }
+    var spostaIn by remember { mutableStateOf(false) }
+    if (sel.isNotEmpty()) androidx.activity.compose.BackHandler { sel = emptySet() }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -915,9 +918,22 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
                 dismissButton = { TextButton({ daUnire = null }) { Text("No") } },
             )
         }
-        Text("Tieni premuta una foto se la persona è sbagliata.", style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(16.dp, 6.dp))
-        GrigliaFoto(sue, onLongClick = { daEscludere = it }) { i -> apriFoto(sue, i) }
+        if (sel.isEmpty()) {
+            Text("Tieni premuta una foto sbagliata per selezionarla, poi toglila o spostala nella persona giusta.",
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(16.dp, 6.dp))
+        } else {
+            Row(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.secondaryContainer).padding(4.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                IconButton({ sel = emptySet() }) { Icon(Icons.Default.Close, "Annulla selezione") }
+                Text("${sel.size}", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                TextButton({ sel = sue.map { it.id }.toSet() }) { Text("Tutte") }
+                TextButton({ confermaTogli = true }) { Text("Togli") }
+                Button({ spostaIn = true }) { Text("Sposta in…") }
+            }
+        }
+        GrigliaFoto(sue, selezionate = sel, onLongClick = { f -> sel = if (f.id in sel) sel - f.id else sel + f.id }) { i ->
+            if (sel.isNotEmpty()) { val fid = sue[i].id; sel = if (fid in sel) sel - fid else sel + fid } else apriFoto(sue, i)
+        }
     }
 
     if (dialogoNome) {
@@ -949,14 +965,35 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
             vm.unisci(p.id, o.id); dialogoUnisci = false
         }
     }
-    daEscludere?.let { f ->
+    if (confermaTogli) {
+        val n = if (sel.size == 1) "questa foto" else "${sel.size} foto"
         AlertDialog(
-            onDismissRequest = { daEscludere = null },
-            title = { Text("Non è questa persona?") },
-            text = { Text("Tolgo questa foto dal gruppo «${p.nome ?: "Senza nome"}».") },
-            confirmButton = { TextButton({ vm.escludi(f.id, p.id); daEscludere = null }) { Text("Togli") } },
-            dismissButton = { TextButton({ daEscludere = null }) { Text("Annulla") } },
+            onDismissRequest = { confermaTogli = false },
+            title = { Text("Non è ${p.nome ?: "questa persona"}?") },
+            text = { Text("Tolgo $n dal gruppo. Se sai chi è, usa invece «Sposta in…».") },
+            confirmButton = { TextButton({ vm.escludiFoto(sel.toList(), p.id); sel = emptySet(); confermaTogli = false }) { Text("Togli") } },
+            dismissButton = { TextButton({ confermaTogli = false }) { Text("Annulla") } },
         )
+    }
+    if (spostaIn) {
+        var simili by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
+        var nuovoNome by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(sel) { simili = vm.somiglianzeFoto(sel.toList(), p.id) }
+        val n = if (sel.size == 1) "questa foto" else "${sel.size} foto"
+        if (nuovoNome != null) AlertDialog(
+            onDismissRequest = { spostaIn = false },
+            title = { Text("Nuova persona") },
+            text = { OutlinedTextField(nuovoNome!!, { nuovoNome = it }, singleLine = true, placeholder = { Text("Nome") }) },
+            confirmButton = {
+                TextButton({
+                    if (nuovoNome!!.isNotBlank()) { vm.nuovaPersonaDaFoto(sel.toList(), p.id, nuovoNome!!); sel = emptySet(); spostaIn = false }
+                }) { Text("Crea e sposta") }
+            },
+            dismissButton = { TextButton({ spostaIn = false }) { Text("Annulla") } },
+        ) else DialogoScegliPersona("Sposta $n in…", persone, p.id, simili, { spostaIn = false },
+            extra = { TextButton({ nuovoNome = "" }) { Text("+ Nuova persona") } }) { o ->
+            vm.spostaFoto(sel.toList(), p.id, o); sel = emptySet(); spostaIn = false
+        }
     }
 }
 
