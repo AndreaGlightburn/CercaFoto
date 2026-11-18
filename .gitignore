@@ -3,3 +3,5 @@ build/
 local.properties
 *.p12
 .idea/
+desktop/build/
+desktop/.gradle/
