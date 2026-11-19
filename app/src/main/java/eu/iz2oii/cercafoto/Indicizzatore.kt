@@ -26,7 +26,7 @@ import java.util.Locale
 /** Foto da indicizzare. uri/cartella valorizzati solo per le cartelle esterne (SAF). */
 class MediaFoto(
     val id: Long, val data: Long, val modificata: Long, val nome: String, val album: String,
-    val uri: Uri? = null, val cartella: String? = null,
+    val uri: Uri? = null, val cartella: String? = null, val volume: String? = null,
 ) {
     val uriEffettivo: Uri get() = uri ?: uriFoto(id)
 }
@@ -53,7 +53,7 @@ fun nomeCartella(tree: String): String {
     val id = runCatching { DocumentsContract.getTreeDocumentId(Uri.parse(tree)) }.getOrDefault(tree)
     val parti = id.split(':', limit = 2)
     val vol = parti[0]; val path = parti.getOrElse(1) { "" }
-    val v = when (vol) { "primary" -> "Memoria interna"; "home" -> "Documenti"; else -> "Unità $vol" }
+    val v = when (vol) { "primary" -> "Memoria interna"; "home" -> "Documenti"; else -> Unita.descrizioni[vol] ?: "Unità $vol" }
     return if (path.isBlank()) v else "$v · $path"
 }
 
@@ -79,7 +79,7 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
             val proj = arrayOf(
                 MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN,
                 MediaStore.Images.Media.DATE_MODIFIED, MediaStore.Images.Media.DISPLAY_NAME,
-                MediaStore.Images.Media.BUCKET_DISPLAY_NAME
+                MediaStore.Images.Media.BUCKET_DISPLAY_NAME, MediaStore.Images.Media.VOLUME_NAME
             )
             // VOLUME_EXTERNAL comprende memoria interna e schede SD
             ctx.contentResolver.query(
@@ -91,7 +91,7 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
                     val taken = if (c.isNull(1)) 0L else c.getLong(1)
                     out += MediaFoto(
                         c.getLong(0), if (taken > 0) taken else mod * 1000, mod,
-                        c.getString(3) ?: "", c.getString(4) ?: ""
+                        c.getString(3) ?: "", c.getString(4) ?: "", volume = c.getString(5)
                     )
                 }
             }
@@ -211,9 +211,13 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
         val esterne = db.fotoEsterne()
         val presenti = galleria.mapTo(HashSet()) { it.id }
         // Rimuove solo ciò che è davvero sparito: le foto di unità scollegate restano nell'indice
+        // le foto di una scheda SD tolta restano nell'indice (con nomi e correzioni) finché non la rimetti
+        val volumiMontati = runCatching { MediaStore.getExternalVolumeNames(ctx) }.getOrDefault(emptySet())
+        db.completaVolumi(galleria)
+        val volumi = db.volumi()
         val rimosse = gia.keys.filter { id ->
             val c = esterne[id]
-            id !in presenti && (c == null || c in raggiungibili || c !in cartelle)
+            id !in presenti && if (c == null) volumi[id].let { it == null || it in volumiMontati } else (c in raggiungibili || c !in cartelle)
         }
         db.rimuovi(rimosse)
         var cambiato = rimosse.isNotEmpty()

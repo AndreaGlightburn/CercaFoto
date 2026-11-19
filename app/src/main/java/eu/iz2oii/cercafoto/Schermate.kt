@@ -146,6 +146,7 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
                 }
             }
         }
+        BannerUnita(vm)
         if (av.attivo && av.totale > 0) {
             LinearProgressIndicator(
                 progress = { av.fatte / av.totale.toFloat() },
@@ -183,6 +184,27 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
     if (aggiungiPersona) DialogoAggiungiPersona(vm, selezionate, { aggiungiPersona = false }) { selezione = emptySet() }
     azione?.let { t ->
         DialogoAzione(vm, t, selezionate, chiudi = { azione = null }) { selezione = emptySet() }
+    }
+}
+
+/** Proposta di aggiungere un'unità USB appena collegata */
+@Composable
+fun BannerUnita(vm: AppVM, inIndice: Boolean = false) {
+    val nuove by vm.unitaNuove.collectAsStateWithLifecycle()
+    val apri = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        r.data?.data?.let { vm.aggiungiCartella(it) }
+    }
+    for (u in nuove) Card(Modifier.fillMaxWidth().padding(12.dp, 6.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Unità collegata: ${u.nome}", fontWeight = FontWeight.Bold)
+            Text("Vuoi cercare le foto anche qui? Nel selettore conferma la cartella principale dell'unità (o una sua cartella) e tocca «Usa questa cartella».",
+                style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button({ runCatching { apri.launch(u.intent) } }) { Text("Aggiungi") }
+                if (!inIndice) TextButton({ vm.rifiutaUnita(u.uuid) }) { Text("Non ora") }
+            }
+        }
     }
 }
 
@@ -1095,10 +1117,14 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text("Cartelle e unità esterne", fontWeight = FontWeight.Bold)
-                Text("La galleria (memoria interna e scheda SD) è già inclusa. Qui puoi aggiungere una chiavetta USB, un disco esterno o altre cartelle.",
+                BannerUnita(vm, inIndice = true)
+                Text("La galleria (memoria interna e scheda SD) è già inclusa. Qui puoi aggiungere chiavette e dischi USB-C o altre cartelle: quando li ricolleghi, le foto nuove vengono cercate da sole.",
                     style = MaterialTheme.typography.bodySmall)
+                val collegate = remember(cartelle) { Unita.uuidCollegati(ctx) }
                 for (c in cartelle) Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(nomeCartella(c), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    val uuid = Unita.uuidDi(c)
+                    val scollegata = uuid != null && uuid != "primary" && uuid != "home" && uuid !in collegate
+                    Text(nomeCartella(c) + if (scollegata) "  (scollegata)" else "", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
                     IconButton({ vm.rimuoviCartella(c) }) { Icon(Icons.Default.Close, "Rimuovi") }
                 }
                 OutlinedButton({ sceltaCartella.launch(null) }) { Text("Aggiungi cartella o unità esterna") }

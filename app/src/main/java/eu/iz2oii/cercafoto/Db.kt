@@ -67,7 +67,7 @@ fun ByteArray.toFloats(): FloatArray {
     return FloatArray(size / 4) { bb.getFloat() }
 }
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 4) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 5) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -98,7 +98,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         db.execSQL("CREATE INDEX volto_foto ON volto(foto_id)")
         db.execSQL("CREATE INDEX volto_persona ON volto(persona_id)")
         db.execSQL("CREATE TABLE persona(id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, copertina INTEGER, foto INTEGER DEFAULT 0, nascosta INTEGER DEFAULT 0)")
-        onUpgrade(db, 1, 4)
+        onUpgrade(db, 1, 5)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {
@@ -118,6 +118,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             // associazioni foto-persona fatte a mano, senza volto visibile
             db.execSQL("ALTER TABLE volto ADD COLUMN manuale INTEGER DEFAULT 0")
         }
+        if (o < 5) runCatching { db.execSQL("ALTER TABLE foto ADD COLUMN volume TEXT") }
         if (o < 4) {
             // scambio con l'app Windows: identificativo stabile delle persone e impronta dei file
             db.execSQL("ALTER TABLE persona ADD COLUMN uid TEXT")
@@ -132,6 +133,26 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             while (c.moveToNext()) out += c.getLong(0) to uriDi(c.getLong(0), c.getString(1))
         }
         return out
+    }
+
+    /** Completa il volume delle foto indicizzate prima che venisse salvato */
+    fun completaVolumi(galleria: List<MediaFoto>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val st = db.compileStatement("UPDATE foto SET volume = ? WHERE id = ? AND volume IS NULL")
+            for (m in galleria) if (m.volume != null) { st.bindString(1, m.volume); st.bindLong(2, m.id); st.executeUpdateDelete() }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    /** id -> volume della galleria (memoria interna / scheda SD) */
+    fun volumi(): HashMap<Long, String> {
+        val m = HashMap<Long, String>()
+        readableDatabase.rawQuery("SELECT id, volume FROM foto WHERE cartella IS NULL AND volume IS NOT NULL", null).use { c ->
+            while (c.moveToNext()) m[c.getLong(0)] = c.getString(1)
+        }
+        return m
     }
 
     /** id -> cartella (solo foto di cartelle esterne) */
@@ -205,7 +226,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             val cv = ContentValues().apply {
                 put("manuali", manuali); put("rimosse", rimosse)
                 put("id", m.id); put("data", r?.dataExif ?: m.data); put("modificata", m.modificata)
-                put("uri", m.uri?.toString()); put("cartella", m.cartella)
+                put("uri", m.uri?.toString()); put("cartella", m.cartella); put("volume", m.volume)
                 put("nome", m.nome); put("album", m.album)
                 put("etichette", r?.etichette?.joinToString(";") { "${it.first}:${it.second}" } ?: "")
                 put("volti", r?.volti?.size ?: 0)

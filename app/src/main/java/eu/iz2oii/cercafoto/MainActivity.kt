@@ -79,6 +79,7 @@ fun App(vm: AppVM = viewModel()) {
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         permesso = haPermessoFoto(ctx)
+        vm.aggiornaUnita()
         if (permesso) Indicizzatore.avvia(ctx)
     }
 

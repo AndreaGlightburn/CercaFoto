@@ -30,6 +30,14 @@
             </intent-filter>
         </activity>
 
+        <!-- unità esterna collegata: aggiorna l'indice delle cartelle già aggiunte -->
+        <receiver android:name=".UnitaCollegata" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_MOUNTED" />
+                <data android:scheme="file" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"

@@ -176,6 +176,21 @@ class AppVM(app: Application) : AndroidViewModel(app) {
 
     val cartelle = MutableStateFlow(Impostazioni.cartelle(app))
 
+    /** Unità USB collegate non ancora aggiunte (uuid, nome, intent del selettore già posizionato sull'unità) */
+    data class UnitaNuova(val uuid: String, val nome: String, val intent: android.content.Intent)
+    val unitaNuove = MutableStateFlow<List<UnitaNuova>>(emptyList())
+
+    fun aggiornaUnita() {
+        val ctx = getApplication<Application>()
+        Unita.aggiorna(ctx)
+        unitaNuove.value = Unita.daProporre(ctx).map { UnitaNuova(it.uuid!!, it.getDescription(ctx), it.createOpenDocumentTreeIntent()) }
+        cartelle.value = Impostazioni.cartelle(ctx)
+    }
+
+    fun rifiutaUnita(uuid: String) {
+        Unita.rifiuta(getApplication(), uuid); aggiornaUnita()
+    }
+
     fun aggiungiCartella(uri: android.net.Uri) {
         val ctx = getApplication<Application>()
         val rw = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -184,6 +199,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         val nuove = Impostazioni.cartelle(ctx) + uri.toString()
         Impostazioni.setCartelle(ctx, nuove); cartelle.value = nuove
         Indicizzatore.avvia(ctx, sostituisci = true)
+        aggiornaUnita()
     }
 
     fun rimuoviCartella(tree: String) {
