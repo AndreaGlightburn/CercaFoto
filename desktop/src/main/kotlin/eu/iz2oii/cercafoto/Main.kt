@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -69,13 +70,14 @@ fun main() {
     }
 }
 
-enum class Scheda { CERCA, PERSONE, INDICE }
+enum class Scheda { CERCA, PERSONE, FILTRI, INDICE }
 
 @Composable
 fun App(finestra: java.awt.Window) {
     var scheda by remember { mutableStateOf(if (Impostazioni.cartelle.isEmpty()) Scheda.INDICE else Scheda.CERCA) }
     var visore by remember { mutableStateOf<Pair<List<FotoIdx>, Int>?>(null) }
     var personaAperta by remember { mutableStateOf<Long?>(null) }
+    var filtroAperto by remember { mutableStateOf<Long?>(null) }
     val lavoro by Stato.lavoro.collectAsState()
     val messaggio by Stato.messaggio.collectAsState()
     val snackbar = remember { SnackbarHostState() }
@@ -89,11 +91,14 @@ fun App(finestra: java.awt.Window) {
                 Spacer(Modifier.height(8.dp))
                 NavigationRailItem(scheda == Scheda.CERCA, { scheda = Scheda.CERCA }, { Icon(Icons.Default.Search, null) }, label = { Text("Cerca") })
                 NavigationRailItem(scheda == Scheda.PERSONE, { scheda = Scheda.PERSONE; personaAperta = null }, { Icon(Icons.Default.Person, null) }, label = { Text("Persone") })
+                NavigationRailItem(scheda == Scheda.FILTRI, { scheda = Scheda.FILTRI; filtroAperto = null }, { Icon(Icons.Default.Star, null) }, label = { Text("Filtri") })
                 NavigationRailItem(scheda == Scheda.INDICE, { scheda = Scheda.INDICE }, { Icon(Icons.Default.Settings, null) }, label = { Text("Cartelle") })
             }
             Box(Modifier.weight(1f).fillMaxHeight()) {
                 when (scheda) {
-                    Scheda.CERCA -> SchermataCerca(apri)
+                    Scheda.CERCA -> SchermataCerca(apri) { id -> filtroAperto = id; scheda = Scheda.FILTRI }
+                    Scheda.FILTRI -> filtroAperto?.let { SchermataFiltro(it, finestra, apri, { filtroAperto = null }) { scheda = Scheda.CERCA } }
+                        ?: SchermataFiltri(finestra, { filtroAperto = it }) { scheda = Scheda.CERCA }
                     Scheda.PERSONE -> personaAperta?.let { SchermataPersona(it, apri) { personaAperta = null } } ?: SchermataPersone { personaAperta = it }
                     Scheda.INDICE -> SchermataIndice(finestra)
                 }
@@ -114,7 +119,7 @@ private val SUGGERIMENTI = listOf("Persone", "Gruppi", "Sorrisi", "Bambini", "Do
 // ---------------------------------------------------------------- CERCA
 
 @Composable
-fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit) {
+fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit, apriFiltro: (Long) -> Unit) {
     val q by Stato.query.collectAsState()
     val ris by Stato.risultati.collectAsState()
     val persone by Stato.persone.collectAsState()
@@ -123,6 +128,11 @@ fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit) {
     var selezione by remember { mutableStateOf(setOf<Long>()) }
     var pannello by remember { mutableStateOf(false) }
     var aggiungi by remember { mutableStateOf(false) }
+    var nuovoFiltro by remember { mutableStateOf(false) }
+    val filtriUtente by Stato.filtriUtente.collectAsState()
+    val filtroAttivo by Stato.filtroAttivo.collectAsState()
+    val aggiuntaEsempi by Stato.aggiuntaEsempi.collectAsState()
+    val filtroEsempi = filtriUtente.firstOrNull { it.id == aggiuntaEsempi }
 
     val descr by Stato.descrizione.collectAsState()
     Column(Modifier.fillMaxSize().padding(8.dp)) {
@@ -142,6 +152,17 @@ fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit) {
                 OutlinedButton({ pannello = true }) { Icon(Icons.AutoMirrored.Filled.List, null); Spacer(Modifier.width(6.dp)); Text("Filtri") }
             }
         }
+        if (filtroEsempi != null) Card(Modifier.fillMaxWidth().padding(top = 6.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+            Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Cerca e seleziona (tieni premuto) altre foto da aggiungere come esempi a «${filtroEsempi.nome}».", Modifier.weight(1f))
+                TextButton({ Stato.aggiuntaEsempi.value = null }) { Text("Fine") }
+            }
+        }
+        filtriUtente.firstOrNull { it.id == filtroAttivo }?.let { fa ->
+            Row(Modifier.padding(top = 6.dp)) {
+                InputChip(true, { Stato.filtroAttivo.value = null }, label = { Text("Filtro: ${fa.nome}") }, trailingIcon = { Icon(Icons.Default.Close, null, Modifier.size(16.dp)) })
+            }
+        }
         if (filtri.attivi > 0) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 6.dp)) {
                 items(descriviFiltri(filtri)) { (t, togli) ->
@@ -150,6 +171,7 @@ fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit) {
             }
         } else {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(top = 6.dp)) {
+                items(filtriUtente) { fu -> FilterChip(filtroAttivo == fu.id, { Stato.filtroAttivo.value = if (filtroAttivo == fu.id) null else fu.id }, label = { Text("★ " + fu.nome) }) }
                 items(persone.filter { it.nome != null && !it.nascosta }.map { it.nome!! } + SUGGERIMENTI) { s ->
                     SuggestionChip({ Stato.query.value = s }, label = { Text(s) })
                 }
@@ -166,6 +188,8 @@ fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit) {
             if (selezione.isNotEmpty()) {
                 TextButton({ selezione = ris.map { it.id }.toSet() }) { Text("Tutte") }
                 TextButton({ aggiungi = true }) { Text("Aggiungi a una persona…") }
+                if (filtroEsempi != null) Button({ Stato.correggiFiltro(filtroEsempi.id, selezione, positivi = true); selezione = emptySet() }) { Text("Aggiungi come esempi a «${filtroEsempi.nome}»") }
+                else TextButton({ nuovoFiltro = true }, enabled = Clip.disponibile) { Text("Crea filtro da esempi…") }
                 TextButton({ selezione = emptySet() }) { Text("Annulla selezione") }
             }
         }
@@ -175,6 +199,11 @@ fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit) {
     }
     if (pannello) PannelloFiltri(filtri, applica = { Stato.filtri.value = it }) { pannello = false }
     if (aggiungi) DialogoAggiungiPersona(selezione.toList(), { aggiungi = false }) { selezione = emptySet() }
+    if (nuovoFiltro) DialogoNome("Nome del nuovo filtro (es. Casa al mare, Grigliata, Ortensie)", "Crea", { nuovoFiltro = false }) { nome ->
+        val ids = selezione.toList(); selezione = emptySet()
+        if (ids.size < 2) Stato.messaggio.value = "Seleziona almeno 2 foto (meglio 5–20)"
+        else Stato.creaFiltroDaEsempi(nome, ids) { id -> apriFiltro(id) }
+    }
 }
 
 // ---------------------------------------------------------------- VISORE

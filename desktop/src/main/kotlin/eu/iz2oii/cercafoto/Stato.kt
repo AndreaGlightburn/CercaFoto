@@ -36,14 +36,39 @@ object Stato {
     val descrizione = MutableStateFlow(false)
     @Volatile private var vettori: Map<Long, FloatArray> = emptyMap()
 
-    private data class Richiesta(val q: String, val descr: Boolean)
+    // ------------------------------------------------------------ filtri personalizzati
+    val filtriUtente = MutableStateFlow<List<FiltroUtente>>(emptyList())
+    /** filtro personalizzato applicato alla ricerca (id) */
+    val filtroAttivo = MutableStateFlow<Long?>(null)
+    /** se impostato, la selezione in Cerca può aggiungere esempi a questo filtro */
+    val aggiuntaEsempi = MutableStateFlow<Long?>(null)
+    fun vettoriClip() = vettori
+
+    private data class Richiesta(val q: String, val descr: Boolean, val filtro: Long?)
+
+    /** Ricerca + filtri: i nomi dei filtri personalizzati scritti nella ricerca funzionano come parole chiave */
+    private fun calcola(r: Richiesta, f: List<FotoIdx>, p: List<Persona>, fi: Filtri, fu: List<FiltroUtente>): List<FotoIdx> {
+        var q = r.q
+        val insiemi = ArrayList<Set<Long>>()
+        fu.firstOrNull { it.id == r.filtro }?.let { insiemi += FiltriUtente.membri(it, vettori).map { m -> m.first }.toSet() }
+        if (!r.descr) {
+            var qn = " " + Testo.normalizza(q) + " "
+            for (x in fu.sortedByDescending { it.nome.length }) {
+                val n = Testo.normalizza(x.nome)
+                if (n.isNotEmpty() && qn.contains(" $n ")) { insiemi += FiltriUtente.membri(x, vettori).map { it.first }.toSet(); qn = qn.replace(" $n ", " ") }
+            }
+            q = qn.trim()
+        }
+        val base = if (r.descr && q.isNotBlank() && Clip.disponibile) {
+            val perId = f.associateBy { it.id }
+            runCatching { Clip.cerca(q.trim(), vettori) }.getOrDefault(emptyList()).mapNotNull { perId[it.first] }
+        } else Ricerca.cerca(q, f, p)
+        return fi.applica(base.filter { x -> insiemi.all { x.id in it } })
+    }
 
     val risultati: StateFlow<List<FotoIdx>> =
-        combine(combine(query, descrizione) { q, d -> Richiesta(q, d) }.debounce(300), foto, persone, filtri) { r, f, p, fi ->
-            if (r.descr && r.q.isNotBlank() && Clip.disponibile) {
-                val perId = f.associateBy { it.id }
-                fi.applica(runCatching { Clip.cerca(r.q.trim(), vettori) }.getOrDefault(emptyList()).mapNotNull { perId[it.first] })
-            } else fi.applica(Ricerca.cerca(r.q, f, p))
+        combine(combine(query, descrizione, filtroAttivo) { q, d, fa -> Richiesta(q, d, fa) }.debounce(300), foto, persone, filtri, filtriUtente) { r, f, p, fi, fu ->
+            calcola(r, f, p, fi, fu)
         }
             .flowOn(Dispatchers.Default)
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -63,6 +88,7 @@ object Stato {
     fun ricarica() {
         scope.launch {
             vettori = Db.vettoriClip()
+            filtriUtente.value = FiltriUtente.tutti()
             foto.value = Db.caricaFoto(); persone.value = Db.caricaPersone(); conteggi.value = Db.conteggi()
         }
     }
@@ -156,4 +182,41 @@ object Stato {
         "Importate ${e.persone} persone (${e.nuove} nuove), correzioni su ${foto(e.foto)}" +
             (if (e.fotoNonTrovate > 0) " (${e.fotoNonTrovate} non presenti qui)" else "") + ", ${e.voltiRiconosciuti} volti riconosciuti"
     }
+
+    // ------------------------------------------------------------ filtri personalizzati: operazioni
+    fun creaFiltroDaEsempi(nome: String, ids: List<Long>, dopo: (Long) -> Unit = {}) = sfondo("Imparo «${nome.trim()}» dagli esempi…") {
+        val id = FiltriUtente.daEsempi(0, nome, ids.toSet(), emptySet(), vettori)
+        filtriUtente.value = FiltriUtente.tutti(); dopo(id)
+        "Filtro «${nome.trim()}» creato da ${ids.size} esempi: controlla i risultati ed escludi quelli sbagliati"
+    }
+
+    fun creaFiltroDaDescrizione(nome: String, frasi: List<String>, dopo: (Long) -> Unit = {}) = sfondo("Creo il filtro…") {
+        val id = FiltriUtente.daDescrizione(0, nome, frasi)
+        filtriUtente.value = FiltriUtente.tutti(); dopo(id)
+        "Filtro «${nome.trim()}» creato"
+    }
+
+    /** Aggiunge esempi giusti (positivi) o sbagliati (negativi) e riaddestra */
+    fun correggiFiltro(id: Long, ids: Collection<Long>, positivi: Boolean) = sfondo("Riaddestro il filtro…") {
+        val f = FiltriUtente.tutti().first { it.id == id }
+        val pos = if (positivi) f.positivi + ids else f.positivi - ids.toSet()
+        val neg = if (positivi) f.negativi - ids.toSet() else f.negativi + ids
+        if (f.esempi) FiltriUtente.daEsempi(id, f.nome, pos, neg, vettori, f.soglia)
+        else {   // filtro da descrizione: le correzioni lo trasformano in filtro da esempi, partendo dalle foto che già trova
+            val partenza = FiltriUtente.membri(f, vettori).take(30).map { it.first }.toSet()
+            FiltriUtente.daEsempi(id, f.nome, partenza + pos - neg, neg, vettori)
+        }
+        filtriUtente.value = FiltriUtente.tutti()
+        if (positivi) "Aggiunte ${foto(ids.size)} come esempi" else "Escluse ${foto(ids.size)}: il filtro ha imparato la differenza"
+    }
+
+    fun sogliaFiltro(id: Long, s: Float) {
+        filtriUtente.value = filtriUtente.value.map { if (it.id == id) it.copy(soglia = s) else it }
+        scope.launch { FiltriUtente.impostaSoglia(id, s) }
+    }
+
+    fun rinominaFiltro(id: Long, nome: String) = op { FiltriUtente.rinomina(id, nome) }
+    fun eliminaFiltro(id: Long) = op { FiltriUtente.elimina(id); if (filtroAttivo.value == id) filtroAttivo.value = null }
+    fun esportaFiltro(f: FiltroUtente, file: File) = sfondo("Esportazione…") { FiltriUtente.esporta(f, file); "Filtro salvato in ${file.name}" }
+    fun importaFiltro(file: File) = sfondo("Importazione…") { FiltriUtente.importa(file); "Filtro importato da ${file.name}" }
 }
