@@ -52,6 +52,9 @@ object Scambio {
                 r.rawQuery("SELECT emb FROM volto WHERE persona_id = ? AND emb IS NOT NULL ORDER BY area DESC LIMIT 24", arrayOf(id.toString())).use { e ->
                     while (e.moveToNext()) campioni += e.getBlob(0).toFloats()
                 }
+                if (campioni.size < 24) r.rawQuery("SELECT emb FROM riferimento WHERE persona_id = ? LIMIT ${24 - campioni.size}", arrayOf(id.toString())).use { e ->
+                    while (e.moveToNext()) campioni += e.getBlob(0).toFloats()
+                }
                 persone += PersonaX(uid, c.getString(1), c.getInt(2) == 1, campioni)
             }
         }
@@ -104,21 +107,17 @@ object Scambio {
             val id = loc ?: w.insert("persona", null, ContentValues().apply { put("nome", p.nome); put("nascosta", if (p.nascosta) 1 else 0) }).also { nuove++ }
             w.update("persona", ContentValues().apply { put("uid", p.uid) }, "id=? AND (uid IS NULL OR uid = '')", arrayOf(id.toString()))
             w.execSQL("UPDATE persona SET nome = ? WHERE id = ? AND (nome IS NULL OR nome = '')", arrayOf<Any>(p.nome, id))
+            if (p.campioni.isNotEmpty()) db.salvaRiferimenti(id, p.campioni)
             mappa[p.uid] = id
         }
 
         // 2) correzioni per foto: abbinamento per nome file (+ dimensione / impronta)
         val perNome = db.caricaFoto().groupBy { it.nome.lowercase() }
-        var abbinate = 0; var mancanti = 0
+        var abbinate = 0; var mancanti = 0; var voltiAbbinati = 0
         for ((i, fx) in pacchetto.foto.withIndex()) {
             if (i % 20 == 0) avanzamento("Foto: ${i + 1} di ${pacchetto.foto.size}")
             val cand = perNome[fx.nome.lowercase()].orEmpty()
-            val f = when {
-                cand.isEmpty() -> null
-                cand.size == 1 && (fx.dimensione <= 0 || dimensione(ctx, cand[0].uri).let { it <= 0 || it == fx.dimensione }) -> cand[0]
-                fx.sha256 != null -> cand.firstOrNull { sha(ctx, db, it) == fx.sha256 }
-                else -> cand.firstOrNull { dimensione(ctx, it.uri) == fx.dimensione }
-            }
+            val f = ScambioFormato.scegliFoto(cand, fx, { dimensione(ctx, it.uri) }, { it.data }, { sha(ctx, db, it) })
             if (f == null) { mancanti++; continue }
             abbinate++
             if (fx.etichette.isNotEmpty() || fx.rimosse.isNotEmpty())
@@ -128,15 +127,18 @@ object Scambio {
                 val pid = v.uid?.let { mappa[it] }
                 if (v.manuale) { if (pid != null) db.associa(listOf(f.id), pid); continue }
                 val target = if (v.escluso) Db.ESCLUSO else pid ?: continue
-                val best = locVolti.maxByOrNull { ScambioFormato.iou(it.l, it.t, it.r, it.b, v.l, v.t, v.r, v.b) } ?: continue
-                if (ScambioFormato.iou(best.l, best.t, best.r, best.b, v.l, v.t, v.r, v.b) >= 0.3f)
-                    w.update("volto", ContentValues().apply { put("persona_id", target) }, "id=?", arrayOf(best.id.toString()))
+                val k = ScambioFormato.abbinaRiquadro(locVolti.map { floatArrayOf(it.l, it.t, it.r, it.b) }, v.l, v.t, v.r, v.b)
+                if (k >= 0) {
+                    w.update("volto", ContentValues().apply { put("persona_id", target) }, "id=?", arrayOf(locVolti[k].id.toString()))
+                    voltiAbbinati++
+                }
             }
         }
 
         // 3) riconoscimento: volti non ancora assegnati a una persona con nome, confrontati con i campioni importati
         avanzamento("Riconosco i volti…")
-        val soglia = Impostazioni.soglia(ctx)
+        // i campioni arrivano da un altro rilevatore di volti: soglia un po' più permissiva
+        val soglia = Impostazioni.soglia(ctx) - 0.05f
         val conCampioni = pacchetto.persone.filter { it.campioni.isNotEmpty() && mappa[it.uid] != null }
         var riconosciuti = 0
         if (conCampioni.isNotEmpty()) {
@@ -160,6 +162,6 @@ object Scambio {
         }
         avanzamento("Raggruppo i volti…")
         Raggruppa.esegui(ctx)
-        return Esito(pacchetto.persone.size, nuove, abbinate, mancanti, riconosciuti)
+        return Esito(pacchetto.persone.size, nuove, abbinate, mancanti, riconosciuti + voltiAbbinati)
     }
 }

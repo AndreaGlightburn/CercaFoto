@@ -11,7 +11,12 @@ object Raggruppa {
         val membri = ArrayList<Volto>()
         fun aggiungi(v: Volto) {
             membri += v
-            for (i in somma.indices) somma[i] += v.emb[i]
+            somma(v.emb)
+        }
+        /** campione importato: sposta il centro ma non è un volto da assegnare */
+        fun somma(e: FloatArray) {
+            if (e.size != somma.size) return
+            for (i in somma.indices) somma[i] += e[i]
             System.arraycopy(somma, 0, centro, 0, somma.size); normalizza(centro)
         }
     }
@@ -36,6 +41,12 @@ object Raggruppa {
                 val gi = perPersona.getOrPut(p) { gruppi += Gruppo(p, v.emb.size); gruppi.size - 1 }
                 v.gruppo = gi; gruppi[gi].aggiungi(v)
             } else liberi += v
+        }
+        // le persone con nome usano anche i campioni importati dall'altro dispositivo
+        for ((p, campioni) in Db.riferimenti()) {
+            if (p !in nominate || campioni.isEmpty()) continue
+            val gi = perPersona.getOrPut(p) { gruppi += Gruppo(p, campioni[0].size); gruppi.size - 1 }
+            campioni.forEach { gruppi[gi].somma(it) }
         }
         liberi.sortByDescending { it.area }
         for (v in liberi) {

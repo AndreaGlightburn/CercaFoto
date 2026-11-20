@@ -32,6 +32,8 @@ object Scambio {
             uidDi[id] = uid
             val campioni = ArrayList<FloatArray>()
             Db.q("SELECT emb FROM volto WHERE persona_id = ? AND emb IS NOT NULL ORDER BY area DESC LIMIT 24", id) { campioni += it.getBytes(1).toFloats() }
+            // se qui ci sono pochi volti, aggiunge i campioni ricevuti in precedenza
+            if (campioni.size < 24) Db.q("SELECT emb FROM riferimento WHERE persona_id = ? LIMIT ?", id, 24 - campioni.size) { campioni += it.getBytes(1).toFloats() }
             persone += PersonaX(uid, nome, nascosta, campioni)
         }
         val tutte = Db.caricaFoto().associateBy { it.id }
@@ -67,19 +69,15 @@ object Scambio {
             val id = loc ?: Db.ins("INSERT INTO persona(nome, nascosta) VALUES (?, ?)", p.nome, p.nascosta).also { nuove++ }
             Db.u("UPDATE persona SET uid = ? WHERE id = ? AND (uid IS NULL OR uid = '')", p.uid, id)
             Db.u("UPDATE persona SET nome = ? WHERE id = ? AND (nome IS NULL OR nome = '')", p.nome, id)
+            if (p.campioni.isNotEmpty()) Db.salvaRiferimenti(id, p.campioni)
             mappa[p.uid] = id
         }
         val perNome = Db.caricaFoto().groupBy { it.nome.lowercase() }
-        var abbinate = 0; var mancanti = 0
+        var abbinate = 0; var mancanti = 0; var voltiAbbinati = 0
         for ((i, fx) in pacchetto.foto.withIndex()) {
             if (i % 20 == 0) avanzamento("Foto: ${i + 1} di ${pacchetto.foto.size}")
             val cand = perNome[fx.nome.lowercase()].orEmpty()
-            val f = when {
-                cand.isEmpty() -> null
-                cand.size == 1 && (fx.dimensione <= 0 || File(cand[0].percorso).length() == fx.dimensione) -> cand[0]
-                fx.sha256 != null -> cand.firstOrNull { sha(it.id, it.percorso) == fx.sha256 }
-                else -> cand.firstOrNull { File(it.percorso).length() == fx.dimensione }
-            }
+            val f = ScambioFormato.scegliFoto(cand, fx, { File(it.percorso).length() }, { it.data }, { sha(it.id, it.percorso) })
             if (f == null) { mancanti++; continue }
             abbinate++
             if (fx.etichette.isNotEmpty() || fx.rimosse.isNotEmpty()) Db.etichetteManuali(f.id, (f.manuali + fx.etichette).distinct(), f.rimosse + fx.rimosse)
@@ -88,12 +86,13 @@ object Scambio {
                 val pid = v.uid?.let { mappa[it] }
                 if (v.manuale) { if (pid != null) Db.associa(listOf(f.id), pid); continue }
                 val target = if (v.escluso) Db.ESCLUSO else pid ?: continue
-                val best = loc.maxByOrNull { ScambioFormato.iou(it.l, it.t, it.r, it.b, v.l, v.t, v.r, v.b) } ?: continue
-                if (ScambioFormato.iou(best.l, best.t, best.r, best.b, v.l, v.t, v.r, v.b) >= 0.3f) Db.u("UPDATE volto SET persona_id = ? WHERE id = ?", target, best.id)
+                val k = ScambioFormato.abbinaRiquadro(loc.map { floatArrayOf(it.l, it.t, it.r, it.b) }, v.l, v.t, v.r, v.b)
+                if (k >= 0) { Db.u("UPDATE volto SET persona_id = ? WHERE id = ?", target, loc[k].id); voltiAbbinati++ }
             }
         }
         avanzamento("Riconosco i volti…")
-        val soglia = Impostazioni.soglia
+        // i campioni arrivano da un altro rilevatore di volti: soglia un po' più permissiva
+        val soglia = Impostazioni.soglia - 0.05f
         val conCampioni = pacchetto.persone.filter { it.campioni.isNotEmpty() && mappa[it.uid] != null }
         var riconosciuti = 0
         if (conCampioni.isNotEmpty()) {
@@ -112,6 +111,6 @@ object Scambio {
         }
         avanzamento("Raggruppo i volti…")
         Raggruppa.esegui()
-        return Esito(pacchetto.persone.size, nuove, abbinate, mancanti, riconosciuti)
+        return Esito(pacchetto.persone.size, nuove, abbinate, mancanti, riconosciuti + voltiAbbinati)
     }
 }

@@ -21,6 +21,12 @@ object Raggruppa {
             for (i in somma.indices) somma[i] += v.emb[i]
             ricalcola()
         }
+        /** campione importato: sposta il centro ma non è un volto da assegnare */
+        fun somma(e: FloatArray) {
+            if (e.size != somma.size) return
+            for (i in somma.indices) somma[i] += e[i]
+            ricalcola()
+        }
         fun ricalcola() {
             System.arraycopy(somma, 0, centro, 0, somma.size)
             normalizza(centro)
@@ -60,6 +66,12 @@ object Raggruppa {
         }
 
         // 1° passaggio: assegnazione incrementale, partendo dai volti più grandi (più affidabili)
+        // le persone con nome usano anche i campioni importati dall'altro dispositivo
+        for ((p, campioni) in Db.get(ctx).riferimenti()) {
+            if (p !in nominate || campioni.isEmpty()) continue
+            val g = perPersona.getOrPut(p) { Gruppo(p, campioni[0].size).also { gruppi += it } }
+            campioni.forEach { g.somma(it) }
+        }
         liberi.sortByDescending { it.area }
         for (v in liberi) {
             var best = -1; var bestSim = soglia

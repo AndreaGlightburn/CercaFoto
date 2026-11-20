@@ -67,7 +67,7 @@ fun ByteArray.toFloats(): FloatArray {
     return FloatArray(size / 4) { bb.getFloat() }
 }
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 5) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 6) {
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -98,7 +98,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         db.execSQL("CREATE INDEX volto_foto ON volto(foto_id)")
         db.execSQL("CREATE INDEX volto_persona ON volto(persona_id)")
         db.execSQL("CREATE TABLE persona(id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, copertina INTEGER, foto INTEGER DEFAULT 0, nascosta INTEGER DEFAULT 0)")
-        onUpgrade(db, 1, 5)
+        onUpgrade(db, 1, 6)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {
@@ -119,6 +119,11 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             db.execSQL("ALTER TABLE volto ADD COLUMN manuale INTEGER DEFAULT 0")
         }
         if (o < 5) runCatching { db.execSQL("ALTER TABLE foto ADD COLUMN volume TEXT") }
+        if (o < 6) {
+            // campioni dei volti importati dall'altro dispositivo (riferimento per le persone con nome)
+            db.execSQL("CREATE TABLE IF NOT EXISTS riferimento(persona_id INTEGER, emb BLOB)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS riferimento_persona ON riferimento(persona_id)")
+        }
         if (o < 4) {
             // scambio con l'app Windows: identificativo stabile delle persone e impronta dei file
             db.execSQL("ALTER TABLE persona ADD COLUMN uid TEXT")
@@ -415,6 +420,24 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         return somme
     }
 
+    fun salvaRiferimenti(personaId: Long, campioni: List<FloatArray>) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete("riferimento", "persona_id=?", arrayOf(personaId.toString()))
+            for (c in campioni) db.insert("riferimento", null, ContentValues().apply { put("persona_id", personaId); put("emb", c.toBlob()) })
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    fun riferimenti(): HashMap<Long, MutableList<FloatArray>> {
+        val m = HashMap<Long, MutableList<FloatArray>>()
+        readableDatabase.rawQuery("SELECT persona_id, emb FROM riferimento", null).use { c ->
+            while (c.moveToNext()) m.getOrPut(c.getLong(0)) { mutableListOf() }.add(c.getBlob(1).toFloats())
+        }
+        return m
+    }
+
     fun rinomina(id: Long, nome: String) {
         writableDatabase.update("persona", ContentValues().apply { put("nome", nome.trim().ifBlank { null }) }, "id=?", arrayOf(id.toString()))
     }
@@ -434,6 +457,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
                 while (c.moveToNext()) if (c.getLong(0) == src) nomeSrc = c.getString(1) else nomeDest = c.getString(1)
             }
             db.execSQL("UPDATE volto SET persona_id = ? WHERE persona_id = ?", arrayOf(dest, src))
+            db.execSQL("UPDATE riferimento SET persona_id = ? WHERE persona_id = ?", arrayOf(dest, src))
             if (nomeDest.isNullOrBlank() && !nomeSrc.isNullOrBlank())
                 db.update("persona", ContentValues().apply { put("nome", nomeSrc) }, "id=?", arrayOf(dest.toString()))
             db.delete("persona", "id=?", arrayOf(src.toString()))
@@ -564,6 +588,6 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
 
     fun azzera() {
         val db = writableDatabase
-        db.execSQL("DELETE FROM volto"); db.execSQL("DELETE FROM foto"); db.execSQL("DELETE FROM persona")
+        db.execSQL("DELETE FROM volto"); db.execSQL("DELETE FROM foto"); db.execSQL("DELETE FROM persona"); db.execSQL("DELETE FROM riferimento")
     }
 }

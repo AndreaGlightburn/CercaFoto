@@ -88,6 +88,9 @@ object Db {
             s.execute("CREATE TABLE IF NOT EXISTS persona(id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, copertina INTEGER, foto INTEGER DEFAULT 0, nascosta INTEGER DEFAULT 0, uid TEXT)")
             // v2: ricerca libera (vettore CLIP) ed etichette automatiche
             for (col in listOf("clip BLOB", "etichette TEXT")) runCatching { s.execute("ALTER TABLE foto ADD COLUMN $col") }
+            // campioni dei volti importati dall'altro dispositivo (fanno da riferimento per le persone con nome)
+            s.execute("CREATE TABLE IF NOT EXISTS riferimento(persona_id INTEGER, emb BLOB)")
+            s.execute("CREATE INDEX IF NOT EXISTS riferimento_persona ON riferimento(persona_id)")
         }
     }
 
@@ -263,6 +266,17 @@ object Db {
 
     // ------------------------------------------------------------ persone
 
+    fun salvaRiferimenti(personaId: Long, campioni: List<FloatArray>) = tx {
+        u("DELETE FROM riferimento WHERE persona_id = ?", personaId)
+        for (c in campioni) ins("INSERT INTO riferimento(persona_id, emb) VALUES (?, ?)", personaId, c.toBlob())
+    }
+
+    fun riferimenti(): HashMap<Long, MutableList<FloatArray>> {
+        val m = HashMap<Long, MutableList<FloatArray>>()
+        q("SELECT persona_id, emb FROM riferimento") { m.getOrPut(it.getLong(1)) { mutableListOf() }.add(it.getBytes(2).toFloats()) }
+        return m
+    }
+
     fun ricontaInterno() {
         u("UPDATE persona SET foto = (SELECT COUNT(DISTINCT foto_id) FROM volto WHERE persona_id = persona.id)")
         u("UPDATE persona SET copertina = (SELECT id FROM volto WHERE persona_id = persona.id ORDER BY manuale, area DESC LIMIT 1) WHERE copertina IS NULL OR copertina NOT IN (SELECT id FROM volto WHERE persona_id = persona.id)")
@@ -276,6 +290,7 @@ object Db {
         var nomeSrc: String? = null; var nomeDest: String? = null; var uidSrc: String? = null
         q("SELECT id, nome, uid FROM persona WHERE id IN (?, ?)", dest, src) { if (it.getLong(1) == src) { nomeSrc = it.getString(2); uidSrc = it.getString(3) } else nomeDest = it.getString(2) }
         u("UPDATE volto SET persona_id = ? WHERE persona_id = ?", dest, src)
+        u("UPDATE riferimento SET persona_id = ? WHERE persona_id = ?", dest, src)
         if (nomeDest.isNullOrBlank() && !nomeSrc.isNullOrBlank()) u("UPDATE persona SET nome = ? WHERE id = ?", nomeSrc, dest)
         if (uidSrc != null) u("UPDATE persona SET uid = ? WHERE id = ? AND (uid IS NULL OR uid = '')", uidSrc, dest)
         u("DELETE FROM persona WHERE id = ?", src)
@@ -325,7 +340,7 @@ object Db {
     }
 
     fun azzera() = tx {
-        u("DELETE FROM volto"); u("DELETE FROM foto"); u("DELETE FROM persona")
+        u("DELETE FROM volto"); u("DELETE FROM foto"); u("DELETE FROM persona"); u("DELETE FROM riferimento")
         Percorsi.miniature.listFiles()?.forEach { it.delete() }; Percorsi.volti.listFiles()?.forEach { it.delete() }
     }
 }

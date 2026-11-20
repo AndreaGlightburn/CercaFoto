@@ -111,6 +111,33 @@ object ScambioFormato {
         return m
     }
 
+    /**
+     * Trova, tra i riquadri locali [l,t,r,b], quello dello stesso volto: telefono e PC usano rilevatori diversi,
+     * quindi si confronta la posizione del centro (rispetto alla grandezza del volto) e un rapporto d'area ragionevole.
+     * Ritorna l'indice o -1.
+     */
+    fun abbinaRiquadro(locali: List<FloatArray>, l: Float, t: Float, r: Float, b: Float): Int {
+        val cx = (l + r) / 2; val cy = (t + b) / 2; val w = r - l; val h = b - t
+        var best = -1; var bestD = Float.MAX_VALUE
+        for ((i, q) in locali.withIndex()) {
+            val qw = q[2] - q[0]; val qh = q[3] - q[1]
+            if (qw <= 0f || qh <= 0f || w <= 0f || h <= 0f) continue
+            val d = kotlin.math.hypot(cx - (q[0] + q[2]) / 2, cy - (q[1] + q[3]) / 2)
+            val rapporto = (w * h) / (qw * qh)
+            if (d < 0.5f * maxOf(w, qw) && rapporto in 0.2f..5f && d < bestD) { bestD = d; best = i }
+        }
+        return best
+    }
+
+    /** Sceglie tra i file locali con lo stesso nome: stessa dimensione, poi stessa data di scatto (±2 s), poi impronta */
+    fun <T> scegliFoto(cand: List<T>, fx: FotoX, dimensione: (T) -> Long, data: (T) -> Long, sha: (T) -> String?): T? {
+        if (cand.isEmpty()) return null
+        if (fx.dimensione > 0) cand.firstOrNull { dimensione(it) == fx.dimensione }?.let { return it }
+        if (fx.data > 0) cand.filter { kotlin.math.abs(data(it) - fx.data) <= 2000 }.let { if (it.size == 1) return it[0] }
+        if (fx.sha256 != null && cand.size <= 5) cand.firstOrNull { sha(it) == fx.sha256 }?.let { return it }
+        return null
+    }
+
     /** Sovrapposizione di due riquadri normalizzati */
     fun iou(l1: Float, t1: Float, r1: Float, b1: Float, l2: Float, t2: Float, r2: Float, b2: Float): Float {
         val il = maxOf(l1, l2); val itop = maxOf(t1, t2); val ir = minOf(r1, r2); val ib = minOf(b1, b2)
