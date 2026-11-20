@@ -24,6 +24,9 @@ object Impostazioni {
     var cartelle: List<String>
         get() = p.getProperty("cartelle", "").split('|').filter { it.isNotBlank() }
         set(v) { p.setProperty("cartelle", v.joinToString("|")); salva() }
+    var lato: Int
+        get() = p.getProperty("lato", "150").toIntOrNull() ?: 150
+        set(v) { p.setProperty("lato", v.toString()); salva() }
     var soglia: Float
         get() = p.getProperty("soglia", "0.5").toFloatOrNull() ?: 0.5f
         set(v) { p.setProperty("soglia", v.toString()); salva() }

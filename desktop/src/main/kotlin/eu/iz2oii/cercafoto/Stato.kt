@@ -25,6 +25,9 @@ object Stato {
     val query = MutableStateFlow("")
     val filtri = MutableStateFlow(Filtri())
     val cartelle = MutableStateFlow(Impostazioni.cartelle)
+    /** dimensione delle anteprime (dp), regolabile con lo zoom */
+    val lato = MutableStateFlow(Impostazioni.lato)
+    fun zoom(nuovo: Int) { val v = nuovo.coerceIn(70, 420); lato.value = v; Impostazioni.lato = v }
     val lavoro = MutableStateFlow<String?>(null)
     val messaggio = MutableStateFlow<String?>(null)
     val avanzamento get() = Indicizzatore.stato

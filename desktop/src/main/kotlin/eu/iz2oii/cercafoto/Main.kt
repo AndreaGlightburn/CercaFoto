@@ -160,8 +160,9 @@ fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit) {
             Text("Indicizzazione: ${av.fatte} di ${av.totale}", style = MaterialTheme.typography.bodySmall)
         }
         Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (selezione.isEmpty()) "${ris.size} foto · tieni premuto su una foto per selezionare" else "${selezione.size} selezionate",
+            Text(if (selezione.isEmpty()) "${ris.size} foto · tieni premuto su una foto per selezionare · Ctrl+rotellina per lo zoom" else "${selezione.size} selezionate",
                 style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+            ZoomAnteprime()
             if (selezione.isNotEmpty()) {
                 TextButton({ selezione = ris.map { it.id }.toSet() }) { Text("Tutte") }
                 TextButton({ aggiungi = true }) { Text("Aggiungi a una persona…") }
@@ -233,7 +234,10 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             if (i > 0) IconButton({ i-- }, Modifier.align(Alignment.CenterStart)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Precedente", tint = Color.White) }
             if (i < lista.size - 1) IconButton({ i++ }, Modifier.align(Alignment.CenterEnd)) { Icon(Icons.AutoMirrored.Filled.ArrowForward, "Successiva", tint = Color.White) }
         }
-        Column(Modifier.width(380.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surface).verticalScroll(rememberScrollState()).padding(16.dp)) {
+        val scorriPannello = rememberScrollState()
+        Box(Modifier.width(380.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surface)) {
+        androidx.compose.foundation.VerticalScrollbar(androidx.compose.foundation.rememberScrollbarAdapter(scorriPannello), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+        Column(Modifier.fillMaxSize().verticalScroll(scorriPannello).padding(16.dp)) {
             Text(formatoData.format(Date(f.data)), fontWeight = FontWeight.Bold)
             Text(f.nome, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(6.dp))
@@ -264,6 +268,7 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             Text(if (f.manuali.isEmpty()) "Nessuna" else f.manuali.joinToString(", "))
             TextButton({ modifica = true }) { Text("Modifica etichette") }
             TextButton({ Stato.query.value = ""; Stato.filtri.value = Filtri(album = f.album); chiudi() }) { Text("Altre foto di questa cartella") }
+        }
         }
     }
     voltoScelto?.let { v -> DialogoVolto(v, persone, { voltoScelto = null }) { id -> voltoScelto = null; apriPersona(id) } }
@@ -339,7 +344,9 @@ fun SchermataPersone(apri: (Long) -> Unit) {
             FilterChip(tutte, { tutte = !tutte }, label = { Text("Anche volti singoli e nascosti") })
         }
         Text("${visibili.size} gruppi" + if (av.attivo && av.fase == "volti") " · sto raggruppando i volti…" else "", style = MaterialTheme.typography.labelLarge)
-        LazyVerticalGrid(GridCells.Adaptive(130.dp), Modifier.fillMaxSize(), contentPadding = PaddingValues(8.dp)) {
+        val statoGriglia = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+        Box(Modifier.fillMaxSize()) {
+        LazyVerticalGrid(GridCells.Adaptive(130.dp), Modifier.fillMaxSize().padding(end = 12.dp), state = statoGriglia, contentPadding = PaddingValues(8.dp)) {
             items(visibili, key = { it.id }) { p ->
                 Column(Modifier.padding(6.dp).clickable { apri(p.id) }, horizontalAlignment = Alignment.CenterHorizontally) {
                     VoltoMini(p, 100.dp)
@@ -347,6 +354,8 @@ fun SchermataPersone(apri: (Long) -> Unit) {
                     Text("${p.foto} foto" + if (p.nascosta) " · nascosta" else "", style = MaterialTheme.typography.bodySmall)
                 }
             }
+        }
+        androidx.compose.foundation.VerticalScrollbar(androidx.compose.foundation.rememberScrollbarAdapter(statoGriglia), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
         }
     }
     if (pannello) PannelloFiltri(filtri, conCartelle = false, applica = { filtri = it }) { pannello = false }
@@ -419,6 +428,7 @@ fun SchermataPersona(id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit, indietro:
         }
         Row(Modifier.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(if (sel.isEmpty()) "Tieni premuto su una foto sbagliata per selezionarla" else "${sel.size} selezionate", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            ZoomAnteprime()
             if (sel.isNotEmpty()) {
                 TextButton({ sel = sue.map { it.id }.toSet() }) { Text("Tutte") }
                 TextButton({ Stato.escludiFoto(sel.toList(), id); sel = emptySet() }) { Text("Togli") }
@@ -483,7 +493,10 @@ fun SchermataIndice(finestra: java.awt.Window) {
     val cartelle by Stato.cartelle.collectAsState()
     val (nFoto, nVolti, nPersone) = Stato.conteggi.collectAsState().value
     var confermaAzzera by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp).widthIn(max = 900.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    val scorrimento = rememberScrollState()
+    Box(Modifier.fillMaxSize()) {
+    androidx.compose.foundation.VerticalScrollbar(androidx.compose.foundation.rememberScrollbarAdapter(scorrimento), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+    Column(Modifier.fillMaxSize().verticalScroll(scorrimento).padding(20.dp).widthIn(max = 900.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Text("Cartelle e indice", style = MaterialTheme.typography.headlineSmall)
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
@@ -543,6 +556,7 @@ fun SchermataIndice(finestra: java.awt.Window) {
         }
         OutlinedButton({ confermaAzzera = true }, enabled = !av.attivo) { Text("Rianalizza tutto da capo") }
         Text("Cerca Foto per Windows ${System.getProperty("jpackage.app-version") ?: ""} · Pony10 · Modelli: FaceNet (Apache 2.0), UltraFace (MIT), età/sesso (MIT), CLIP multilingue (Apache 2.0 / MIT)", style = MaterialTheme.typography.bodySmall)
+    }
     }
     if (confermaAzzera) AlertDialog(
         onDismissRequest = { confermaAzzera = false },

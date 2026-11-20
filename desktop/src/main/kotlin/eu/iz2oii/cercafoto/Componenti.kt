@@ -1,6 +1,12 @@
 package eu.iz2oii.cercafoto
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.VerticalScrollbar
+import androidx.compose.foundation.rememberScrollbarAdapter
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isCtrlPressed
+import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -89,12 +95,21 @@ fun VoltoMini(p: Persona, dim: Dp) {
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
-fun GrigliaFoto(lista: List<FotoIdx>, selezionate: Set<Long> = emptySet(), lato: Dp = 150.dp, modifier: Modifier = Modifier,
+fun GrigliaFoto(lista: List<FotoIdx>, selezionate: Set<Long> = emptySet(), lato: Dp? = null, modifier: Modifier = Modifier,
                 onLongClick: ((FotoIdx) -> Unit)? = null, onClick: (Int) -> Unit) {
     val stato = rememberLazyGridState()
-    LazyVerticalGrid(GridCells.Adaptive(lato), modifier.fillMaxSize(), state = stato, contentPadding = PaddingValues(4.dp)) {
+    val latoZoom by Stato.lato.collectAsState()
+    val dim = lato ?: latoZoom.dp
+    Box(modifier.fillMaxSize().onPointerEvent(PointerEventType.Scroll) { e ->
+        // Ctrl + rotellina = zoom delle anteprime
+        if (lato == null && e.keyboardModifiers.isCtrlPressed) {
+            val dy = e.changes.firstOrNull()?.scrollDelta?.y ?: 0f
+            if (dy != 0f) { Stato.zoom(latoZoom + if (dy < 0) 20 else -20); e.changes.forEach { it.consume() } }
+        }
+    }) {
+    LazyVerticalGrid(GridCells.Adaptive(dim), Modifier.fillMaxSize().padding(end = 12.dp), state = stato, contentPadding = PaddingValues(4.dp)) {
         items(lista.size, key = { lista[it].id }) { i ->
             val f = lista[i]; val sel = f.id in selezionate
             Box(Modifier.aspectRatio(1f).padding(2.dp)
@@ -104,6 +119,19 @@ fun GrigliaFoto(lista: List<FotoIdx>, selezionate: Set<Long> = emptySet(), lato:
                 if (sel) Icon(Icons.Default.CheckCircle, null, Modifier.align(Alignment.TopStart).padding(4.dp), tint = MaterialTheme.colorScheme.primary)
             }
         }
+    }
+    VerticalScrollbar(rememberScrollbarAdapter(stato), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
+    }
+}
+
+/** Cursore di zoom delle anteprime: più provini o più dettaglio */
+@Composable
+fun ZoomAnteprime() {
+    val l by Stato.lato.collectAsState()
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton({ Stato.zoom(l - 30) }) { Text("−") }
+        Slider(l.toFloat(), { Stato.zoom(it.toInt()) }, valueRange = 70f..420f, modifier = Modifier.width(160.dp))
+        TextButton({ Stato.zoom(l + 30) }) { Text("+") }
     }
 }
 
