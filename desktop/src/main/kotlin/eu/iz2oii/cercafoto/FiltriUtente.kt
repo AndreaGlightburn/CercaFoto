@@ -96,7 +96,7 @@ object FiltriUtente {
     }
 
     /** Crea o riaddestra un filtro da esempi. [vettori] = vettori CLIP di tutte le foto. */
-    fun daEsempi(id: Long, nome: String, positivi: Set<Long>, negativi: Set<Long>, vettori: Map<Long, FloatArray>, soglia: Float = 0.5f): Long {
+    fun daEsempi(id: Long, nome: String, positivi: Set<Long>, negativi: Set<Long>, vettori: Map<Long, FloatArray>, soglia: Float = 0.28f): Long {
         val pos = positivi.mapNotNull { vettori[it] }
         require(pos.size >= 2) { "Servono almeno 2 foto di esempio già analizzate" }
         val neg = negativi.mapNotNull { vettori[it] }
