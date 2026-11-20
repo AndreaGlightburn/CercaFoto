@@ -141,7 +141,7 @@ class AppVM(app: Application) : AndroidViewModel(app) {
         val ctx = getApplication<Application>()
         sfondo("Esportazione…") {
             val (p, f) = ctx.contentResolver.openOutputStream(uri)!!.use { out -> Scambio.esporta(ctx, out) { lavoro.value = it } }
-            "Esportate $p persone e le correzioni di ${foto(f)}"
+            "File pronto: $p persone e correzioni di ${foto(f)}. Ora puoi condividerlo."
         }
     }
 

@@ -22,6 +22,11 @@ object Scambio {
         } ?: -1L
     }.getOrDefault(-1L)
 
+    private fun shaNota(db: Db, id: Long): String? =
+        db.readableDatabase.rawQuery("SELECT sha FROM foto WHERE id = ?", arrayOf(id.toString())).use { c ->
+            if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
+        }
+
     private fun sha(ctx: Context, db: Db, f: FotoIdx): String? {
         val dbw = db.writableDatabase
         dbw.rawQuery("SELECT sha FROM foto WHERE id = ?", arrayOf(f.id.toString())).use { c ->
@@ -80,7 +85,8 @@ object Scambio {
                         volti += VoltoX(c.getFloat(0), c.getFloat(1), c.getFloat(2), c.getFloat(3), uid, p == Db.ESCLUSO, c.getInt(5) == 1)
                 }
             }
-            foto += FotoX(f.nome, dimensione(ctx, f.uri), f.data, sha(ctx, db, f), f.manuali, f.rimosse.toList(), volti)
+            // impronta solo se già calcolata: leggerla da ogni file renderebbe l'esportazione lentissima
+            foto += FotoX(f.nome, dimensione(ctx, f.uri), f.data, shaNota(db, f.id), f.manuali, f.rimosse.toList(), volti)
         }
         avanzamento("Scrittura del file…")
         ScambioFormato.scrivi(ScambioFormato.Pacchetto("android", System.currentTimeMillis(), persone, foto), out)

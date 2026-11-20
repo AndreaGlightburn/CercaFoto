@@ -70,7 +70,10 @@ object ScambioFormato {
     }
 
     fun leggi(input: InputStream): Pacchetto {
-        val testo = GZIPInputStream(input).use { it.readBytes().toString(Charsets.UTF_8) }
+        val grezzo = input.readBytes()
+        require(grezzo.isNotEmpty()) { "Il file è vuoto: l'esportazione sull'altro dispositivo non era ancora finita. Esporta di nuovo e attendi il messaggio di conferma." }
+        val testo = runCatching { GZIPInputStream(grezzo.inputStream()).use { it.readBytes().toString(Charsets.UTF_8) } }
+            .getOrElse { throw IllegalArgumentException("Il file è incompleto o danneggiato: esporta di nuovo e attendi il messaggio di conferma.") }
         val j = JSONObject(testo)
         require(j.optString("formato") == "cercafoto") { "Non è un file di Cerca Foto" }
         fun lista(a: JSONArray?): List<String> = if (a == null) emptyList() else List(a.length()) { a.getString(it) }

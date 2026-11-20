@@ -49,7 +49,9 @@ object Scambio {
                 val p = r.getLong(5); val uid = uidDi[p]
                 if (uid != null || p == Db.ESCLUSO) volti += VoltoX(r.getFloat(1), r.getFloat(2), r.getFloat(3), r.getFloat(4), uid, p == Db.ESCLUSO, r.getInt(6) == 1)
             }
-            foto += FotoX(f.nome, File(f.percorso).length(), f.data, sha(f.id, f.percorso), f.manuali, f.rimosse.toList(), volti)
+            var nota: String? = null
+            Db.q("SELECT sha FROM foto WHERE id = ?", f.id) { nota = it.getString(1) }
+            foto += FotoX(f.nome, File(f.percorso).length(), f.data, nota, f.manuali, f.rimosse.toList(), volti)
         }
         avanzamento("Scrittura del file…")
         file.outputStream().use { ScambioFormato.scrivi(ScambioFormato.Pacchetto("windows", System.currentTimeMillis(), persone, foto), it) }
