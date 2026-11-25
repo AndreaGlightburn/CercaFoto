@@ -46,6 +46,9 @@ object Stato {
     /** se impostato, la selezione in Cerca può aggiungere esempi a questo filtro */
     val aggiuntaEsempi = MutableStateFlow<Long?>(null)
     fun vettoriClip() = vettori
+    @Volatile private var zoneM: Map<Long, Zone> = emptyMap()
+    /** zone (dettagli) delle foto, se calcolate */
+    fun zone() = zoneM
 
     private data class Richiesta(val q: String, val descr: Boolean, val filtro: Long?, val tipo: String?)
 
@@ -68,7 +71,7 @@ object Stato {
         }
         val base = if (r.descr && q.isNotBlank() && Clip.disponibile) {
             val perId = f.associateBy { it.id }
-            runCatching { Clip.cerca(q.trim(), vettori) }.getOrDefault(emptyList()).mapNotNull { perId[it.first] }
+            runCatching { Clip.cerca(q.trim(), vettori, zoneM) }.getOrDefault(emptyList()).mapNotNull { perId[it.first] }
         } else Ricerca.cerca(q, f, p)
         val filtrate = fi.applica(base.filter { x -> insiemi.all { x.id in it } && (tipo == null || (tipo == "video") == x.isVideo) })
         return comprimiVideo(filtrate)
@@ -117,6 +120,7 @@ object Stato {
     fun ricarica() {
         scope.launch {
             vettori = Db.vettoriClip()
+            zoneM = if (Impostazioni.zone) Db.zone() else emptyMap()
             filtriUtente.value = FiltriUtente.tutti()
             foto.value = Db.caricaFoto(); persone.value = Db.caricaPersone(); conteggi.value = Db.conteggi(); nVideo.value = Db.contaVideo()
         }
@@ -231,6 +235,41 @@ object Stato {
         filtriUtente.value = FiltriUtente.tutti(); dopo(id)
         "Filtro «${nome.trim()}» creato"
     }
+
+    /** Zona di una foto scelta nel visore come esempio giusto o sbagliato di un filtro (o per crearne uno nuovo se [nuovo] non è null) */
+    fun esempioZona(f: FotoIdx, l: Float, t: Float, r: Float, b: Float, filtro: Long?, giusto: Boolean, nuovo: String? = null) = sfondo("Imparo dalla zona scelta…") {
+        val img = Immagini.leggi(f.file, 2400) ?: error("foto non leggibile")
+        val v = Clip.immagine(Zone.ritaglio(img, l, t, r, b))
+        val primaVolta = !Impostazioni.zone
+        Impostazioni.zone = true
+        val msg = if (nuovo != null) {
+            val id = FiltriUtente.nuovoDaZona(nuovo, f.id, l, t, r, b, v, vettori)
+            filtroAperto.value = id
+            "Filtro «${nuovo.trim()}» creato dalla zona"
+        } else {
+            val fu = FiltriUtente.tutti().first { it.id == filtro }
+            Db.nuovoEsempioZona(fu.id, f.id, l, t, r, b, giusto, v)
+            FiltriUtente.impostaDettagli(fu.id, true)
+            if (fu.esempi) FiltriUtente.daEsempi(fu.id, fu.nome, fu.positivi, fu.negativi, vettori, fu.soglia, dettagli = true)
+            else FiltriUtente.daEsempi(fu.id, fu.nome, FiltriUtente.membri(fu, vettori).take(30).map { it.first }.toSet(), emptySet(), vettori, dettagli = true)
+            (if (giusto) "Zona aggiunta come esempio di «${fu.nome}»" else "Zona esclusa da «${fu.nome}»")
+        }
+        filtriUtente.value = FiltriUtente.tutti()
+        // le zone di tutte le foto servono per trovare il dettaglio: si calcolano in sottofondo
+        if (Db.senzaZone().isNotEmpty()) { indicizza(); "$msg. Calcolo i dettagli delle foto in sottofondo" + (if (primaVolta) " (la prima volta richiede tempo)" else "") + ": i risultati migliorano man mano." }
+        else msg
+    }
+
+    fun dettagliFiltro(id: Long, v: Boolean) = sfondo("Riaddestro il filtro…") {
+        val f = FiltriUtente.tutti().first { it.id == id }
+        if (v) Impostazioni.zone = true
+        if (f.esempi) FiltriUtente.daEsempi(id, f.nome, f.positivi, f.negativi, vettori, f.soglia, dettagli = v) else FiltriUtente.impostaDettagli(id, v)
+        filtriUtente.value = FiltriUtente.tutti()
+        if (v && Db.senzaZone().isNotEmpty()) { indicizza(); "Cerco anche nei dettagli: calcolo le zone delle foto in sottofondo" } else null
+    }
+
+    /** filtro da aprire nella scheda Filtri (impostato dopo averlo creato dal visore) */
+    val filtroAperto = MutableStateFlow<Long?>(null)
 
     /** Aggiunge esempi giusti (positivi) o sbagliati (negativi) e riaddestra */
     fun correggiFiltro(id: Long, ids: Collection<Long>, positivi: Boolean) = sfondo("Riaddestro il filtro…") {

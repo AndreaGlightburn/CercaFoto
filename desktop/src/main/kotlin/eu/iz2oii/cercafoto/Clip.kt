@@ -177,9 +177,10 @@ object Clip {
     private var ultimaQuery: Pair<String, FloatArray>? = null
 
     /** Punteggio di ogni foto per una descrizione; restituisce solo quelle pertinenti, dalla migliore */
-    fun cerca(descrizione: String, vettori: Map<Long, FloatArray>): List<Pair<Long, Float>> {
+    fun cerca(descrizione: String, vettori: Map<Long, FloatArray>, zone: Map<Long, Zone> = emptyMap()): List<Pair<Long, Float>> {
         val q = ultimaQuery?.takeIf { it.first == descrizione }?.second ?: testo(listOf(descrizione)).first().also { ultimaQuery = descrizione to it }
-        val p = vettori.map { it.key to dot(q, it.value) }.sortedByDescending { it.second }
+        // con le zone: conta anche il dettaglio migliore della foto (leggermente penalizzato)
+        val p = vettori.map { (id, v) -> id to maxOf(dot(q, v), (zone[id]?.takeIf { it.n > 0 }?.massimo(q) ?: -1f) - 0.012f) }.sortedByDescending { it.second }
         val best = p.firstOrNull()?.second ?: return emptyList()
         return p.filter { it.second >= 0.215f && it.second >= best - 0.06f }.take(1000)
     }

@@ -250,6 +250,8 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
     var dim by remember(f.id) { mutableStateOf<Pair<Int, Int>?>(null) }
     var orient by remember(f.id) { mutableStateOf(1) }
     var messaggio by remember { mutableStateOf<String?>(null) }
+    var selezZona by remember { mutableStateOf(false) }
+    var zonaScelta by remember(f.id) { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(f.id) {
         img = withContext(Dispatchers.IO) { runCatching { Immagini.leggi(f.file, 2400)!!.toComposeImageBitmap() }.getOrNull() }
@@ -281,6 +283,7 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             Key.Minus, Key.NumPadSubtract -> { zoom.applica(1 / 1.4f); true }
             Key.Zero, Key.NumPad0 -> { zoom.azzera(); true }
             Key.L -> { lente = !lente; true }
+            Key.Z -> { if (Clip.disponibile) selezZona = !selezZona; true }
             Key.Escape -> { if (lente) lente = false else if (zoom.ingrandita) zoom.azzera() else chiudi(); true }
             else -> false
         }
@@ -291,6 +294,7 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             VistaZoom(
                 img, dim?.first ?: 0, dim?.second ?: 0, zoom, Modifier.fillMaxSize().padding(8.dp), reg.filtro(), lente,
                 dettaglio = { r, p -> Immagini.zona(file, r.left, r.top, r.right, r.bottom, p, o)?.toComposeImageBitmap() },
+                selezione = if (selezZona) { r -> zonaScelta = r; selezZona = false } else null,
             )
             Row(Modifier.align(Alignment.TopStart).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(chiudi) { Icon(Icons.Default.Close, "Chiudi (Esc)", tint = Color.White) }
@@ -298,6 +302,10 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
                 Spacer(Modifier.width(12.dp))
                 FilterChip(lente, { lente = !lente }, label = { Text("Lente (L)", color = Color.White) },
                     leadingIcon = { Icon(Icons.Default.Search, null, tint = Color.White) })
+                if (Clip.disponibile) {
+                    Spacer(Modifier.width(6.dp))
+                    FilterChip(selezZona, { selezZona = !selezZona }, label = { Text(if (selezZona) "Trascina attorno al dettaglio…" else "Seleziona zona (Z)", color = Color.White) })
+                }
                 Spacer(Modifier.width(6.dp))
                 if (zoom.ingrandita) AssistChip({ zoom.azzera() }, label = { Text("Adatta (0)", color = Color.White) })
                 else Text("Rotellina o doppio clic per ingrandire, trascina per spostarti", color = Color(0xFFBBBBBB), style = MaterialTheme.typography.bodySmall)
@@ -363,6 +371,8 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
                 Text("Filtri personalizzati", fontWeight = FontWeight.Bold)
                 Text(if (f.isVideo) "Insegna a un filtro usando proprio questo momento del video (${tempoVideo(f.tempo)})."
                     else "Insegna a un filtro usando questa foto.", style = MaterialTheme.typography.bodySmall)
+                Text("Per un dettaglio piccolo (un fiore, un anello, un logo) usa «Seleziona zona» in alto e trascina attorno ad esso.",
+                    style = MaterialTheme.typography.bodySmall)
                 Row {
                     for ((giusto, testo) in listOf(true to "È un esempio di…", false to "Non è…")) {
                         var menu by remember { mutableStateOf(false) }
@@ -418,8 +428,50 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
         }
     }
     voltoScelto?.let { v -> DialogoVolto(v, persone, { voltoScelto = null }) { id -> voltoScelto = null; apriPersona(id) } }
+    zonaScelta?.let { z -> DialogoZona(f, img, z) { zonaScelta = null } }
     if (aggiungi) DialogoAggiungiPersona(listOf(f.id), { aggiungi = false }) {}
     if (modifica) DialogoEtichette(f) { modifica = false }
+}
+
+/** Zona scelta nel visore: esempio giusto/sbagliato di un filtro, o nuovo filtro */
+@Composable
+fun DialogoZona(f: FotoIdx, img: ImageBitmap?, z: androidx.compose.ui.geometry.Rect, chiudi: () -> Unit) {
+    val filtri by Stato.filtriUtente.collectAsState()
+    var nome by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = chiudi,
+        title = { Text("Zona selezionata") },
+        text = {
+            Column(Modifier.width(460.dp)) {
+                if (img != null) androidx.compose.foundation.Canvas(Modifier.fillMaxWidth().height(200.dp)) {
+                    val sx = (z.left * img.width).toInt(); val sy = (z.top * img.height).toInt()
+                    val sw = ((z.right - z.left) * img.width).toInt().coerceAtLeast(1); val sh = ((z.bottom - z.top) * img.height).toInt().coerceAtLeast(1)
+                    val k = minOf(size.width / sw, size.height / sh)
+                    val dw = (sw * k).toInt(); val dh = (sh * k).toInt()
+                    drawImage(img, androidx.compose.ui.unit.IntOffset(sx, sy), androidx.compose.ui.unit.IntSize(sw, sh),
+                        androidx.compose.ui.unit.IntOffset(((size.width - dw) / 2).toInt(), ((size.height - dh) / 2).toInt()), androidx.compose.ui.unit.IntSize(dw, dh))
+                }
+                Text("Insegna a un filtro questo dettaglio: il filtro lo cercherà anche quando è piccolo in un angolo della foto.",
+                    style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 6.dp))
+                if (nome != null) {
+                    OutlinedTextField(nome!!, { nome = it }, singleLine = true, label = { Text("Nome del nuovo filtro (es. Ortensie, Fede nuziale)") }, modifier = Modifier.fillMaxWidth())
+                } else {
+                    Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+                        for (x in filtri) Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(x.nome, Modifier.weight(1f))
+                            TextButton({ Stato.esempioZona(f, z.left, z.top, z.right, z.bottom, x.id, true); chiudi() }) { Text("È questo") }
+                            TextButton({ Stato.esempioZona(f, z.left, z.top, z.right, z.bottom, x.id, false); chiudi() }) { Text("Non è questo") }
+                        }
+                    }
+                    TextButton({ nome = "" }) { Text("+ Nuovo filtro da questa zona") }
+                }
+            }
+        },
+        confirmButton = {
+            if (nome != null) TextButton({ if (nome!!.isNotBlank()) { Stato.esempioZona(f, z.left, z.top, z.right, z.bottom, null, true, nome); chiudi() } }) { Text("Crea") }
+        },
+        dismissButton = { TextButton(chiudi) { Text("Annulla") } },
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -703,7 +755,7 @@ fun SchermataIndice(finestra: java.awt.Window) {
                 when {
                     av.attivo && av.fase == "volti" -> { Text("Raggruppo i volti…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                     av.attivo && av.totale > 0 -> {
-                        Text(when (av.fase) { "volti_hd" -> "Rianalisi volti in alta risoluzione: "; "clip" -> "Preparo la ricerca libera e gli oggetti: "; "video" -> "Analisi video: "; else -> "Analisi foto: " } + "${av.fatte} di ${av.totale}" +
+                        Text(when (av.fase) { "volti_hd" -> "Rianalisi volti in alta risoluzione: "; "clip" -> "Preparo la ricerca libera e gli oggetti: "; "video" -> "Analisi video: "; "zone" -> "Calcolo i dettagli (zone) delle foto: "; else -> "Analisi foto: " } + "${av.fatte} di ${av.totale}" +
                             if (av.dettaglio.isNotEmpty()) " — ${av.dettaglio}" else "")
                         LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
                     }
@@ -714,6 +766,17 @@ fun SchermataIndice(finestra: java.awt.Window) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                     if (av.attivo) OutlinedButton({ Stato.ferma() }) { Text("Ferma") } else Button({ Stato.indicizza() }) { Text("Aggiorna indice") }
+                }
+                var conZone by remember { mutableStateOf(Impostazioni.zone) }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                    Switch(conZone, { conZone = it; Impostazioni.zone = it; if (it) Stato.indicizza() else Stato.ricarica() }, enabled = Clip.disponibile)
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text("Analisi dei dettagli")
+                        Text("Calcola l'impronta di 9 zone di ogni foto: la descrizione libera e i filtri di dettaglio trovano anche oggetti piccoli. " +
+                            "Richiede circa 10 volte il tempo della ricerca libera, una volta sola (si accende da sola quando selezioni una zona nel visore).",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
                 }
                 var conVideo by remember { mutableStateOf(Impostazioni.video) }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {

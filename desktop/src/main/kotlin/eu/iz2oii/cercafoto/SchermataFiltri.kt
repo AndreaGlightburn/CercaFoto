@@ -128,6 +128,10 @@ fun SchermataFiltro(id: Long, finestra: java.awt.Window, apriFoto: (List<FotoIdx
             Text("  più foto", style = MaterialTheme.typography.bodySmall)
             Slider(soglia, { soglia = it; Stato.sogliaFiltro(f.id, it) }, valueRange = f.minimo..f.massimo, modifier = Modifier.width(320.dp))
             Text("più preciso", style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.width(16.dp))
+            Checkbox(f.dettagli, { Stato.dettagliFiltro(f.id, it) })
+            Text("Cerca anche nei dettagli" + if (f.zoneGiuste + f.zoneSbagliate > 0) " (${f.zoneGiuste} zone giuste, ${f.zoneSbagliate} sbagliate)" else "",
+                style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.weight(1f))
             ZoomAnteprime()
         }

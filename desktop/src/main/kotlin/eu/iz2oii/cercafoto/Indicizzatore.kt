@@ -43,6 +43,10 @@ object Impostazioni {
         val sys = (System.getenv("SystemDrive") ?: return false).trimEnd('\\', '/').lowercase()
         return c.lowercase().startsWith(sys)
     }
+    /** calcola le zone (dettagli) delle foto per i filtri di dettaglio e la ricerca libera */
+    var zone: Boolean
+        get() = p.getProperty("zone", "false") == "true"
+        set(v) { p.setProperty("zone", v.toString()); salva() }
     var soglia: Float
         get() = p.getProperty("soglia", "0.5").toFloatOrNull() ?: 0.5f
         set(v) { p.setProperty("soglia", v.toString()); salva() }
@@ -169,6 +173,32 @@ object Indicizzatore {
             }
         }
         ultimoDalIndice = dalIndice.get()
+        // zone (dettagli): 9 impronte CLIP per foto, solo se richieste
+        if (Clip.disponibile && Impostazioni.zone && kotlinx.coroutines.currentCoroutineContext().isActive) {
+            val mancanti = Db.senzaZone()
+            if (mancanti.isNotEmpty()) {
+                val n = AtomicInteger(0)
+                stato.value = Avanzamento(true, "zone", 0, mancanti.size)
+                withContext(pool) {
+                    mancanti.chunked(32).forEach { blocco ->
+                        if (!isActive) return@withContext
+                        blocco.map { (id, percorso) ->
+                            async {
+                                val z = runCatching { Immagini.leggi(File(percorso), 1280)?.let { Zone.calcola(it) } }.getOrNull()
+                                Db.salvaZone(id, z)
+                                val k = n.incrementAndGet()
+                                if (k % 4 == 0 || k == mancanti.size) stato.value = Avanzamento(true, "zone", k, mancanti.size)
+                            }
+                        }.awaitAll()
+                    }
+                }
+                // i filtri di dettaglio imparano anche dalle zone appena calcolate
+                runCatching {
+                    val v = Db.vettoriClip(); val zz = Db.zone()
+                    for (f in FiltriUtente.tutti().filter { it.dettagli && it.esempi }) FiltriUtente.daEsempi(f.id, f.nome, f.positivi, f.negativi, v, f.soglia, true, zz)
+                }
+            }
+        }
         // indice sul disco aggiornato per l'altro dispositivo
         if (kotlinx.coroutines.currentCoroutineContext().isActive) aggiornaPortatili(raggiungibili)
     }

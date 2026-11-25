@@ -107,6 +107,8 @@ fun VistaZoom(
     lente: Boolean = false,
     tocco: () -> Unit = {},
     dettaglio: (suspend (IntRect, Int) -> ImageBitmap?)? = null,
+    /** se impostato, trascinando si disegna un riquadro: riceve il riquadro normalizzato (0..1) sull'immagine */
+    selezione: ((Rect) -> Unit)? = null,
 ) {
     var area by remember { mutableStateOf(IntSize.Zero) }
     var tassello by remember(base) { mutableStateOf<Tassello?>(null) }
@@ -115,6 +117,9 @@ fun VistaZoom(
     val scope = rememberCoroutineScope()
     val lenteAgg by rememberUpdatedState(lente)
     val toccoAgg by rememberUpdatedState(tocco)
+    val selAgg by rememberUpdatedState(selezione)
+    var selDa by remember { mutableStateOf<Offset?>(null) }
+    var selA by remember { mutableStateOf<Offset?>(null) }
     val ingrLente = 2.5f
     val raggio = with(androidx.compose.ui.platform.LocalDensity.current) { 80.dp.toPx() }
 
@@ -174,10 +179,16 @@ fun VistaZoom(
                 val giu = awaitFirstDown(requireUnconsumed = false)
                 var mosso = 0f
                 var trascina = false
+                var selez = false
                 do {
                     val ev = awaitPointerEvent()
                     val premuti = ev.changes.count { it.pressed }
-                    if (premuti >= 2) {
+                    if (selAgg != null && premuti == 1) {
+                        val c = ev.changes.first()
+                        if (!selez) { selez = true; selDa = giu.position }
+                        selA = c.position
+                        ev.changes.forEach { it.consume() }
+                    } else if (premuti >= 2) {
                         stato.applica(ev.calculateZoom(), ev.calculatePan(), ev.calculateCentroid(useCurrent = true))
                         ev.changes.forEach { it.consume() }
                     } else if (premuti == 1) {
@@ -191,6 +202,16 @@ fun VistaZoom(
                         }
                     }
                 } while (ev.changes.any { it.pressed })
+                val a = selDa; val b = selA; val cb = selAgg
+                if (selez && a != null && b != null && cb != null) {
+                    val r = rettangolo()
+                    if (r.width > 0 && r.height > 0) {
+                        val l = ((minOf(a.x, b.x) - r.left) / r.width).coerceIn(0f, 1f); val t = ((minOf(a.y, b.y) - r.top) / r.height).coerceIn(0f, 1f)
+                        val rr = ((maxOf(a.x, b.x) - r.left) / r.width).coerceIn(0f, 1f); val bb = ((maxOf(a.y, b.y) - r.top) / r.height).coerceIn(0f, 1f)
+                        if (rr - l > 0.02f && bb - t > 0.02f) cb(Rect(l, t, rr, bb))
+                    }
+                }
+                selDa = null; selA = null
             }
         }
         // rotellina del mouse = zoom; posizione della lente (mouse o dito)
@@ -234,6 +255,12 @@ fun VistaZoom(
             stato.area = area; stato.fit = IntSize(fitW.roundToInt(), fitH.roundToInt())
             val r = rettangolo()
             disegna(base, tassello, r, iw, filtro)
+            val sa = selDa; val sb = selA
+            if (sa != null && sb != null) {
+                val tl = Offset(minOf(sa.x, sb.x), minOf(sa.y, sb.y)); val sz = androidx.compose.ui.geometry.Size(abs(sa.x - sb.x), abs(sa.y - sb.y))
+                drawRect(Color(0x33FFD54F), tl, sz)
+                drawRect(Color(0xFFFFD54F), tl, sz, style = Stroke(2.dp.toPx()))
+            }
             val p = posLente
             if (lente && p != null) {
                 val c = if (lenteTouch) Offset(p.x, max(raggio, p.y - raggio * 1.4f)) else p

@@ -106,6 +106,9 @@ object Db {
             for (col in listOf("video_id INTEGER DEFAULT 0", "tempo INTEGER DEFAULT 0")) runCatching { s.execute("ALTER TABLE foto ADD COLUMN $col") }
             s.execute("CREATE TABLE IF NOT EXISTS video(id INTEGER PRIMARY KEY AUTOINCREMENT, percorso TEXT UNIQUE, cartella TEXT, nome TEXT, album TEXT, data INTEGER, modificata INTEGER, dimensione INTEGER, durata INTEGER, larg INTEGER, alt INTEGER, fotogrammi INTEGER DEFAULT 0)")
             s.execute("CREATE INDEX IF NOT EXISTS foto_video ON foto(video_id)")
+            // v4: zone (dettagli) ed esempi a zona dei filtri
+            s.execute("CREATE TABLE IF NOT EXISTS zona(foto_id INTEGER PRIMARY KEY, dati BLOB)")
+            s.execute("CREATE TABLE IF NOT EXISTS esempio_zona(id INTEGER PRIMARY KEY AUTOINCREMENT, filtro_id INTEGER, foto_id INTEGER, l REAL, t REAL, r REAL, b REAL, giusto INTEGER, vettore BLOB)")
         }
     }
 
@@ -165,7 +168,7 @@ object Db {
     fun rimuovi(ids: Collection<Long>) = tx {
         for (id in ids) {
             q("SELECT id FROM volto WHERE foto_id = ?", id) { Percorsi.volto(it.getLong(1)).delete() }
-            u("DELETE FROM volto WHERE foto_id = ?", id); u("DELETE FROM foto WHERE id = ?", id)
+            u("DELETE FROM volto WHERE foto_id = ?", id); u("DELETE FROM foto WHERE id = ?", id); u("DELETE FROM zona WHERE foto_id = ?", id)
             Percorsi.miniatura(id).delete(); Percorsi.fotogramma(id).delete()
         }
         ricontaInterno()
@@ -272,6 +275,41 @@ object Db {
         }
         return l
     }
+
+    // ------------------------------------------------------------ zone
+
+    fun zone(): HashMap<Long, Zone> {
+        val m = HashMap<Long, Zone>()
+        q("SELECT foto_id, dati FROM zona") { r -> Zone.daBlob(r.getBytes(2))?.let { m[r.getLong(1)] = it } }
+        return m
+    }
+
+    /** foto con vettore CLIP ma senza zone: (id, file da leggere) */
+    fun senzaZone(): List<Pair<Long, String>> {
+        val l = ArrayList<Pair<Long, String>>()
+        q("SELECT f.id, f.percorso, f.video_id FROM foto f LEFT JOIN zona z ON z.foto_id = f.id WHERE z.foto_id IS NULL AND f.clip IS NOT NULL AND length(f.clip) > 0 ORDER BY f.data DESC") {
+            val id = it.getLong(1); l += id to (if (it.getLong(3) > 0) Percorsi.fotogramma(id).absolutePath else it.getString(2))
+        }
+        return l
+    }
+
+    fun salvaZone(id: Long, z: Zone?) { u("INSERT OR REPLACE INTO zona(foto_id, dati) VALUES (?, ?)", id, z?.blob() ?: ByteArray(0)) }
+    fun contaZone() = n("SELECT COUNT(*) FROM zona WHERE length(dati) > 0").toInt()
+
+    class EsempioZona(val id: Long, val filtro: Long, val foto: Long, val l: Float, val t: Float, val r: Float, val b: Float, val giusto: Boolean, val vettore: FloatArray)
+
+    fun esempiZona(filtro: Long): List<EsempioZona> {
+        val out = ArrayList<EsempioZona>()
+        q("SELECT id, filtro_id, foto_id, l, t, r, b, giusto, vettore FROM esempio_zona WHERE filtro_id = ? ORDER BY id", filtro) { x ->
+            out += EsempioZona(x.getLong(1), x.getLong(2), x.getLong(3), x.getFloat(4), x.getFloat(5), x.getFloat(6), x.getFloat(7), x.getInt(8) == 1, x.getBytes(9).toFloats())
+        }
+        return out
+    }
+
+    fun nuovoEsempioZona(filtro: Long, foto: Long, l: Float, t: Float, r: Float, b: Float, giusto: Boolean, v: FloatArray) =
+        ins("INSERT INTO esempio_zona(filtro_id, foto_id, l, t, r, b, giusto, vettore) VALUES (?,?,?,?,?,?,?,?)", filtro, foto, l, t, r, b, giusto, v.toBlob())
+
+    fun eliminaEsempiZona(filtro: Long) = u("DELETE FROM esempio_zona WHERE filtro_id = ?", filtro)
 
     fun salvaClip(id: Long, clip: FloatArray?, etichette: Map<String, Int>) {
         // senza vettore (file illeggibile) si salva un vettore vuoto per non riprovare ogni volta
@@ -393,7 +431,7 @@ object Db {
     }
 
     fun azzera() = tx {
-        u("DELETE FROM volto"); u("DELETE FROM foto"); u("DELETE FROM persona"); u("DELETE FROM riferimento"); u("DELETE FROM video")
+        u("DELETE FROM volto"); u("DELETE FROM foto"); u("DELETE FROM persona"); u("DELETE FROM riferimento"); u("DELETE FROM video"); u("DELETE FROM zona")
         Percorsi.miniature.listFiles()?.forEach { it.delete() }; Percorsi.volti.listFiles()?.forEach { it.delete() }
         Percorsi.fotogrammi.listFiles()?.forEach { it.delete() }
     }
