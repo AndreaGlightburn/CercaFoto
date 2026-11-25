@@ -63,7 +63,7 @@ fun Miniatura(f: FotoIdx, modifier: Modifier = Modifier) {
         if (img == null) img = withContext(Dispatchers.IO) {
             leggiJpeg(Percorsi.miniatura(f.id)) ?: runCatching {
                 // miniatura mancante: la ricrea dall'originale
-                val b = Immagini.leggi(File(f.percorso), 360)!!
+                val b = Immagini.leggi(f.file, 360)!!
                 Percorsi.miniatura(f.id).writeBytes(Immagini.jpeg(b))
                 b.toComposeImageBitmap()
             }.getOrNull()
@@ -71,6 +71,13 @@ fun Miniatura(f: FotoIdx, modifier: Modifier = Modifier) {
     }
     Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
         img?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+        if (f.isVideo) Text(
+            "▶ " + tempoVideo(f.tempo) + if (f.momenti.size > 1) " · ${f.momenti.size} momenti" else "",
+            color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+            modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
+                .background(androidx.compose.ui.graphics.Color(0xB0000000), androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                .padding(horizontal = 5.dp, vertical = 1.dp)
+        )
     }
 }
 

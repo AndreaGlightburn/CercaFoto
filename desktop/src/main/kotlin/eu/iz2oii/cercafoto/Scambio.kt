@@ -43,6 +43,7 @@ object Scambio {
         val foto = ArrayList<FotoX>()
         for ((i, id) in ids.withIndex()) {
             val f = tutte[id] ?: continue
+            if (f.isVideo) continue  // i fotogrammi dei video per ora non vanno nello scambio
             if (i % 20 == 0) avanzamento("Preparo le foto: ${i + 1} di ${ids.size}")
             val volti = ArrayList<VoltoX>()
             Db.q("SELECT l, t, r, b, persona_id, manuale FROM volto WHERE foto_id = ?", id) { r ->
@@ -74,7 +75,7 @@ object Scambio {
             if (p.campioni.isNotEmpty()) Db.salvaRiferimenti(id, p.campioni)
             mappa[p.uid] = id
         }
-        val perNome = Db.caricaFoto().groupBy { it.nome.lowercase() }
+        val perNome = Db.caricaFoto().filter { !it.isVideo }.groupBy { it.nome.lowercase() }
         var abbinate = 0; var mancanti = 0; var voltiAbbinati = 0
         for ((i, fx) in pacchetto.foto.withIndex()) {
             if (i % 20 == 0) avanzamento("Foto: ${i + 1} di ${pacchetto.foto.size}")

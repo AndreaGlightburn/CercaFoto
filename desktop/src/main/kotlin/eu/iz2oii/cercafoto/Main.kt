@@ -2,6 +2,7 @@ package eu.iz2oii.cercafoto
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -153,6 +154,14 @@ fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit, apriFiltro: (Long) -> Uni
                 OutlinedButton({ pannello = true }) { Icon(Icons.AutoMirrored.Filled.List, null); Spacer(Modifier.width(6.dp)); Text("Filtri") }
             }
         }
+        val nVideo by Stato.nVideo.collectAsState()
+        val tipo by Stato.tipo.collectAsState()
+        if (nVideo > 0) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+            FilterChip(tipo == null, { Stato.tipo.value = null }, label = { Text("Foto e video") })
+            FilterChip(tipo == "foto", { Stato.tipo.value = "foto" }, label = { Text("Solo foto") })
+            FilterChip(tipo == "video", { Stato.tipo.value = "video" }, label = { Text("Solo video ($nVideo)") })
+            Text("Nei video la ricerca trova il momento esatto: ▶ indica il minuto.", style = MaterialTheme.typography.bodySmall)
+        }
         if (filtroEsempi != null) Card(Modifier.fillMaxWidth().padding(top = 6.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
             Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Cerca e seleziona (tieni premuto) altre foto da aggiungere come esempi a «${filtroEsempi.nome}».", Modifier.weight(1f))
@@ -224,7 +233,11 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
     val tutte by Stato.foto.collectAsState()
     val persone by Stato.persone.collectAsState()
     val f0 = lista.getOrNull(i) ?: run { chiudi(); return }
-    val f = tutte.firstOrNull { it.id == f0.id } ?: f0
+    // nei video si può passare da un momento all'altro dello stesso filmato
+    var momento by remember(f0.id) { mutableStateOf<Long?>(null) }
+    val f = momento?.let { m -> tutte.firstOrNull { it.id == m } } ?: tutte.firstOrNull { it.id == f0.id } ?: f0
+    val trovati = f0.momenti.toSet()
+    val momentiVideo = remember(tutte, f.video) { if (f.video == null) emptyList() else tutte.filter { it.video == f.video }.sortedBy { it.tempo } }
     var img by remember(f.id) { mutableStateOf<ImageBitmap?>(null) }
     var dettagli by remember(f.id) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
     var volti by remember(f.id) { mutableStateOf<List<VoltoInfo>>(emptyList()) }
@@ -242,11 +255,12 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
         img = withContext(Dispatchers.IO) { runCatching { Immagini.leggi(f.file, 2400)!!.toComposeImageBitmap() }.getOrNull() }
         withContext(Dispatchers.IO) { dim = Immagini.dimensioni(f.file); orient = Immagini.orientamento(f.file) }
         dettagli = withContext(Dispatchers.IO) {
-            val file = f.file
+            val file = f.fileVideo ?: f.file
             buildList {
                 add("File" to file.absolutePath)
+                if (f.isVideo) add("Video" to "momento ${tempoVideo(f.tempo)} di ${tempoVideo(f.durata)}")
                 if (file.exists()) add("Dimensione" to "%.1f MB".format(Locale.ITALIAN, file.length() / 1e6)) else add("Stato" to "file non raggiungibile (unità scollegata?)")
-                addAll(Immagini.exif(file))
+                if (!f.isVideo) addAll(Immagini.exif(file))
             }
         }
     }
@@ -303,9 +317,29 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             Text(f.nome, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(6.dp))
             for ((k, v) in dettagli) Text("$k: $v", style = MaterialTheme.typography.bodySmall)
+            val fv = f.fileVideo
+            if (fv != null) {
+                Button({ Video.riproduci(fv, f.tempo) }, Modifier.padding(top = 6.dp)) { Text("▶ Riproduci da ${tempoVideo(f.tempo)}") }
+                Text("Momenti del video" + if (trovati.size > 1) " (in evidenza quelli trovati dalla ricerca)" else "",
+                    fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                    items(momentiVideo, key = { it.id }) { m ->
+                        val evid = m.id in trovati; val attuale = m.id == f.id
+                        Column(Modifier.width(84.dp).clickable { momento = m.id }, horizontalAlignment = Alignment.CenterHorizontally) {
+                            Miniatura(m, Modifier.size(80.dp, 60.dp).then(
+                                if (attuale) Modifier.border(3.dp, MaterialTheme.colorScheme.primary)
+                                else if (evid) Modifier.border(2.dp, Color(0xFFFFB300)) else Modifier))
+                            Text(tempoVideo(m.tempo), style = MaterialTheme.typography.labelSmall,
+                                fontWeight = if (attuale || evid) FontWeight.Bold else FontWeight.Normal)
+                        }
+                    }
+                }
+                Text("Clic su un momento per vederlo; il pulsante lo riproduce da lì (con VLC se installato, altrimenti con il lettore incluso).",
+                    style = MaterialTheme.typography.bodySmall)
+            }
             Row {
-                TextButton({ runCatching { Desktop.getDesktop().open(f.file) } }) { Text("Apri") }
-                TextButton({ mostraInEsplora(f.file) }) { Text("Mostra nella cartella") }
+                TextButton({ runCatching { Desktop.getDesktop().open(fv ?: f.file) } }) { Text(if (fv != null) "Apri video" else "Apri") }
+                TextButton({ mostraInEsplora(fv ?: f.file) }) { Text("Mostra nella cartella") }
             }
             if (volti.isNotEmpty()) {
                 Text("Persone (clic per vedere o cambiare il gruppo, ✋ = aggiunta a mano)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
@@ -329,6 +363,8 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
                 auto = { reg = if (reg.auto != null) reg.copy(auto = null) else reg.copy(auto = img?.let { Regolazioni.livelliAuto(it) }) },
                 salva = {
                     val r0 = reg; val sorgente = f.file
+                    val cartellaDest = f.fileVideo?.parentFile ?: sorgente.parentFile
+                    val nomeBase = f.fileVideo?.let { it.nameWithoutExtension + "_" + tempoVideo(f.tempo).replace(':', '-') } ?: sorgente.nameWithoutExtension
                     scope.launch {
                         messaggio = "Salvataggio in corso…"
                         messaggio = withContext(Dispatchers.IO) {
@@ -344,9 +380,9 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
                                     b.setRGB(0, y, b.width, n, riga, 0, b.width)
                                     y += n
                                 }
-                                var dest = File(sorgente.parentFile, sorgente.nameWithoutExtension + "_modificata.jpg")
+                                var dest = File(cartellaDest, nomeBase + "_modificata.jpg")
                                 var k = 2
-                                while (dest.exists()) dest = File(sorgente.parentFile, sorgente.nameWithoutExtension + "_modificata_${k++}.jpg")
+                                while (dest.exists()) dest = File(cartellaDest, nomeBase + "_modificata_${k++}.jpg")
                                 dest.writeBytes(Immagini.jpeg(b, 0.95f))
                                 "Copia salvata: ${dest.absolutePath} (sarà indicizzata al prossimo aggiornamento)"
                             }.getOrElse { "Errore nel salvataggio: ${it.message}" }
@@ -483,8 +519,9 @@ fun SchermataPersona(id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit, indietro:
     val foto by Stato.foto.collectAsState()
     val p = persone.firstOrNull { it.id == id }
     if (p == null) { LaunchedEffect(Unit) { indietro() }; return }
-    val sue = remember(foto, id) { foto.filter { id in it.persone } }
+    val sue = remember(foto, id) { Stato.comprimiVideo(foto.filter { id in it.persone }) }
     var sel by remember(id) { mutableStateOf(setOf<Long>()) }
+    fun tutteSel() = Stato.espandi(sel, sue)
     var rinomina by remember { mutableStateOf(false) }
     var unisci by remember { mutableStateOf(false) }
     var sposta by remember { mutableStateOf(false) }
@@ -524,7 +561,7 @@ fun SchermataPersona(id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit, indietro:
             ZoomAnteprime()
             if (sel.isNotEmpty()) {
                 TextButton({ sel = sue.map { it.id }.toSet() }) { Text("Tutte") }
-                TextButton({ Stato.escludiFoto(sel.toList(), id); sel = emptySet() }) { Text("Togli") }
+                TextButton({ Stato.escludiFoto(tutteSel(), id); sel = emptySet() }) { Text("Togli") }
                 Button({ sposta = true }) { Text("Sposta in…") }
                 TextButton({ sel = emptySet() }) { Text("Annulla") }
             }
@@ -556,11 +593,11 @@ fun SchermataPersona(id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit, indietro:
     if (unisci) DialogoScegliPersona("È la stessa persona di…", persone, id, simili, { unisci = false }) { o -> unisciIn = o; unisci = false }
     if (sposta) {
         var s2 by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
-        LaunchedEffect(sel) { s2 = withContext(Dispatchers.IO) { Stato.somiglianzeFoto(sel.toList(), id) } }
+        LaunchedEffect(sel) { s2 = withContext(Dispatchers.IO) { Stato.somiglianzeFoto(tutteSel(), id) } }
         DialogoScegliPersona("Sposta ${sel.size} foto in…", persone, id, s2, { sposta = false },
-            extra = { TextButton({ sposta = false; nuova = true }) { Text("+ Nuova persona") } }) { o -> Stato.spostaFoto(sel.toList(), id, o); sel = emptySet(); sposta = false }
+            extra = { TextButton({ sposta = false; nuova = true }) { Text("+ Nuova persona") } }) { o -> Stato.spostaFoto(tutteSel(), id, o); sel = emptySet(); sposta = false }
     }
-    if (nuova) DialogoNome("Nuova persona", "Crea e sposta", { nuova = false }) { Stato.nuovaPersonaDaFoto(sel.toList(), id, it); sel = emptySet() }
+    if (nuova) DialogoNome("Nuova persona", "Crea e sposta", { nuova = false }) { Stato.nuovaPersonaDaFoto(tutteSel(), id, it); sel = emptySet() }
     daUnire?.let { o ->
         DialogoUnioneSelettiva(foto, sorgente = o, destinazione = p, titolo = "È ${p.nome ?: "questa persona"}?",
             nota = "Gruppo senza nome, somiglianza ${((simili[o.id] ?: 0f) * 100).toInt()}%.") { daUnire = null }
@@ -573,7 +610,7 @@ fun SchermataPersona(id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit, indietro:
 /** Unione con scelta delle foto: parte tutto selezionato, clic per togliere quelle che non c'entrano */
 @Composable
 fun DialogoUnioneSelettiva(foto: List<FotoIdx>, sorgente: Persona, destinazione: Persona, titolo: String, nota: String? = null, chiudi: () -> Unit) {
-    val sue = remember(foto, sorgente.id) { foto.filter { sorgente.id in it.persone } }
+    val sue = remember(foto, sorgente.id) { Stato.comprimiVideo(foto.filter { sorgente.id in it.persone }) }
     var scelte by remember(sorgente.id) { mutableStateOf(sue.map { it.id }.toSet()) }
     val tutte = scelte.size == sue.size
     AlertDialog(
@@ -598,7 +635,7 @@ fun DialogoUnioneSelettiva(foto: List<FotoIdx>, sorgente: Persona, destinazione:
         },
         confirmButton = {
             TextButton({
-                if (tutte) Stato.unisci(destinazione.id, sorgente.id) else Stato.spostaFoto(scelte.toList(), sorgente.id, destinazione)
+                if (tutte) Stato.unisci(destinazione.id, sorgente.id) else Stato.spostaFoto(Stato.espandi(scelte, sue), sorgente.id, destinazione)
                 chiudi()
             }, enabled = scelte.isNotEmpty()) { Text(if (tutte) "Unisci tutto" else "Unisci ${scelte.size} foto") }
         },
@@ -636,11 +673,13 @@ fun SchermataIndice(finestra: java.awt.Window) {
         }
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
-                Text("Foto analizzate: $nFoto · Volti: $nVolti · Persone: $nPersone")
+                val nVid by Stato.nVideo.collectAsState()
+                Text("Foto analizzate: $nFoto · Video: $nVid · Volti: $nVolti · Persone: $nPersone")
                 when {
                     av.attivo && av.fase == "volti" -> { Text("Raggruppo i volti…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                     av.attivo && av.totale > 0 -> {
-                        Text(when (av.fase) { "volti_hd" -> "Rianalisi volti in alta risoluzione: "; "clip" -> "Preparo la ricerca libera e gli oggetti: "; else -> "Analisi foto: " } + "${av.fatte} di ${av.totale}")
+                        Text(when (av.fase) { "volti_hd" -> "Rianalisi volti in alta risoluzione: "; "clip" -> "Preparo la ricerca libera e gli oggetti: "; "video" -> "Analisi video: "; else -> "Analisi foto: " } + "${av.fatte} di ${av.totale}" +
+                            if (av.dettaglio.isNotEmpty()) " — ${av.dettaglio}" else "")
                         LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
                     }
                     av.attivo -> { Text("Lettura delle cartelle…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
@@ -648,6 +687,17 @@ fun SchermataIndice(finestra: java.awt.Window) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                     if (av.attivo) OutlinedButton({ Stato.ferma() }) { Text("Ferma") } else Button({ Stato.indicizza() }) { Text("Aggiorna indice") }
+                }
+                var conVideo by remember { mutableStateOf(Impostazioni.video) }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
+                    Switch(conVideo, { conVideo = it; Impostazioni.video = it }, enabled = Video.disponibile)
+                    Spacer(Modifier.width(10.dp))
+                    Column {
+                        Text("Analizza anche i video")
+                        Text(if (Video.disponibile) "Estrae un fotogramma ogni pochi secondi e a ogni cambio di scena: trovi persone, oggetti e scene col minuto esatto. " +
+                            "La prima volta richiede tempo se hai molti filmati." else "Componente video non trovato in questa installazione.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }
@@ -676,7 +726,7 @@ fun SchermataIndice(finestra: java.awt.Window) {
             }
         }
         OutlinedButton({ confermaAzzera = true }, enabled = !av.attivo) { Text("Rianalizza tutto da capo") }
-        Text("Cerca Foto per Windows ${System.getProperty("jpackage.app-version") ?: ""} · Pony10 · Modelli: FaceNet (Apache 2.0), UltraFace (MIT), età/sesso (MIT), CLIP multilingue (Apache 2.0 / MIT)", style = MaterialTheme.typography.bodySmall)
+        Text("Cerca Foto per Windows ${System.getProperty("jpackage.app-version") ?: ""} · Pony10 · Modelli: FaceNet (Apache 2.0), UltraFace (MIT), età/sesso (MIT), CLIP multilingue (Apache 2.0 / MIT) · Video: FFmpeg (LGPL 2.1, ffmpeg.org)", style = MaterialTheme.typography.bodySmall)
     }
     }
     if (confermaAzzera) AlertDialog(

@@ -14,6 +14,8 @@ object Percorsi {
     val base: File = (System.getenv("LOCALAPPDATA")?.let { File(it, "CercaFoto") } ?: File(System.getProperty("user.home"), ".cercafoto")).apply { mkdirs() }
     val miniature = File(base, "miniature").apply { mkdirs() }
     val volti = File(base, "volti").apply { mkdirs() }
+    val fotogrammi = File(base, "fotogrammi").apply { mkdirs() }
+    fun fotogramma(id: Long) = File(fotogrammi, "$id.jpg")
     fun miniatura(id: Long) = File(miniature, "$id.jpg")
     fun volto(id: Long) = File(volti, "$id.jpg")
 }
@@ -39,9 +41,18 @@ data class FotoIdx(
     val cartella: String? = null,
     val manuali: List<String> = emptyList(),
     val rimosse: Set<String> = emptySet(),
+    /** per i fotogrammi dei video: percorso del filmato, istante (ms) e durata */
+    val video: String? = null,
+    val tempo: Long = 0,
+    val durata: Long = 0,
+    /** nei risultati raggruppati: tutti i fotogrammi dello stesso video rappresentati da questa voce */
+    val momenti: List<Long> = emptyList(),
 ) {
     val testoManuali: String = Testo.normalizza(manuali.joinToString(" "))
-    val file: File get() = File(percorso)
+    /** immagine da mostrare/analizzare (per i video: il fotogramma salvato) */
+    val file: File get() = if (video != null) Percorsi.fotogramma(id) else File(percorso)
+    val fileVideo: File? get() = video?.let { File(it) }
+    val isVideo get() = video != null
 }
 
 data class Persona(val id: Long, val nome: String?, val foto: Int, val nascosta: Boolean, val coverVolto: Long, val coverFoto: Long)
@@ -91,6 +102,10 @@ object Db {
             // campioni dei volti importati dall'altro dispositivo (fanno da riferimento per le persone con nome)
             s.execute("CREATE TABLE IF NOT EXISTS riferimento(persona_id INTEGER, emb BLOB)")
             s.execute("CREATE INDEX IF NOT EXISTS riferimento_persona ON riferimento(persona_id)")
+            // v3: video (ogni fotogramma chiave è una riga di foto con video_id e tempo)
+            for (col in listOf("video_id INTEGER DEFAULT 0", "tempo INTEGER DEFAULT 0")) runCatching { s.execute("ALTER TABLE foto ADD COLUMN $col") }
+            s.execute("CREATE TABLE IF NOT EXISTS video(id INTEGER PRIMARY KEY AUTOINCREMENT, percorso TEXT UNIQUE, cartella TEXT, nome TEXT, album TEXT, data INTEGER, modificata INTEGER, dimensione INTEGER, durata INTEGER, larg INTEGER, alt INTEGER, fotogrammi INTEGER DEFAULT 0)")
+            s.execute("CREATE INDEX IF NOT EXISTS foto_video ON foto(video_id)")
         }
     }
 
@@ -143,7 +158,7 @@ object Db {
 
     fun stati(): HashMap<String, Stato> {
         val m = HashMap<String, Stato>()
-        q("SELECT percorso, id, modificata, dimensione, cartella FROM foto") { m[it.getString(1)] = Stato(it.getLong(2), it.getLong(3), it.getLong(4), it.getString(5)) }
+        q("SELECT percorso, id, modificata, dimensione, cartella FROM foto WHERE video_id = 0") { m[it.getString(1)] = Stato(it.getLong(2), it.getLong(3), it.getLong(4), it.getString(5)) }
         return m
     }
 
@@ -151,10 +166,43 @@ object Db {
         for (id in ids) {
             q("SELECT id FROM volto WHERE foto_id = ?", id) { Percorsi.volto(it.getLong(1)).delete() }
             u("DELETE FROM volto WHERE foto_id = ?", id); u("DELETE FROM foto WHERE id = ?", id)
-            Percorsi.miniatura(id).delete()
+            Percorsi.miniatura(id).delete(); Percorsi.fotogramma(id).delete()
         }
         ricontaInterno()
     }
+
+    // ------------------------------------------------------------ video
+
+    fun statiVideo(): HashMap<String, Stato> {
+        val m = HashMap<String, Stato>()
+        q("SELECT percorso, id, modificata, dimensione, cartella FROM video") { m[it.getString(1)] = Stato(it.getLong(2), it.getLong(3), it.getLong(4), it.getString(5)) }
+        return m
+    }
+
+    fun fotogrammiVideo(videoId: Long): List<Long> { val l = ArrayList<Long>(); q("SELECT id FROM foto WHERE video_id = ?", videoId) { l += it.getLong(1) }; return l }
+
+    fun rimuoviVideo(ids: Collection<Long>) {
+        for (v in ids) { rimuovi(fotogrammiVideo(v)); u("DELETE FROM video WHERE id = ?", v) }
+    }
+
+    /** Crea o aggiorna la riga del video togliendo i fotogrammi precedenti; ritorna l'id */
+    fun salvaVideo(percorso: String, cartella: String, nome: String, album: String, data: Long, modificata: Long, dimensione: Long,
+                   durata: Long, larg: Int, alt: Int): Long {
+        var id = -1L
+        q("SELECT id FROM video WHERE percorso = ?", percorso) { id = it.getLong(1) }
+        if (id >= 0) {
+            rimuovi(fotogrammiVideo(id))
+            u("UPDATE video SET cartella=?, nome=?, album=?, data=?, modificata=?, dimensione=?, durata=?, larg=?, alt=?, fotogrammi=0 WHERE id=?",
+                cartella, nome, album, data, modificata, dimensione, durata, larg, alt, id)
+            return id
+        }
+        return ins("INSERT INTO video(percorso, cartella, nome, album, data, modificata, dimensione, durata, larg, alt) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            percorso, cartella, nome, album, data, modificata, dimensione, durata, larg, alt)
+    }
+
+    fun segnaFotogramma(fotoId: Long, videoId: Long, tempo: Long) = u("UPDATE foto SET video_id = ?, tempo = ? WHERE id = ?", videoId, tempo, fotoId)
+    fun chiudiVideo(videoId: Long, n: Int) = u("UPDATE video SET fotogrammi = ? WHERE id = ?", n, videoId)
+    fun contaVideo() = n("SELECT COUNT(*) FROM video").toInt()
 
     class VoltoNuovo(val l: Float, val t: Float, val r: Float, val b: Float, val emb: FloatArray?, val attr: Attributi?, val ritaglio: ByteArray?)
 
@@ -193,7 +241,8 @@ object Db {
             if (eta != null) attr.getOrPut(f) { mutableListOf() }.add(VoltoAttr(p, eta, r.getFloat(4), r.getString(5), r.getString(6), r.getFloat(7)))
         }
         val out = ArrayList<FotoIdx>()
-        q("SELECT id, data, nome, album, volti, sorriso, colori, percorso, cartella, manuali, rimosse, etichette FROM foto ORDER BY data DESC") { r ->
+        q("SELECT f.id, f.data, f.nome, f.album, f.volti, f.sorriso, f.colori, f.percorso, f.cartella, f.manuali, f.rimosse, f.etichette, v.percorso, f.tempo, v.durata " +
+            "FROM foto f LEFT JOIN video v ON v.id = f.video_id ORDER BY f.data DESC") { r ->
             val id = r.getLong(1)
             val rimosse = r.getString(11)?.split(';')?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
             out += FotoIdx(
@@ -203,6 +252,7 @@ object Db {
                 colori = decodifica(r.getString(7)), attr = attr[id] ?: emptyList(), percorso = r.getString(8), cartella = r.getString(9),
                 manuali = r.getString(10)?.split(';')?.filter { it.isNotBlank() } ?: emptyList(),
                 rimosse = rimosse,
+                video = r.getString(13), tempo = r.getLong(14), durata = r.getLong(15),
             )
         }
         return out
@@ -217,7 +267,9 @@ object Db {
 
     fun senzaClip(): List<Pair<Long, String>> {
         val l = ArrayList<Pair<Long, String>>()
-        q("SELECT id, percorso FROM foto WHERE clip IS NULL ORDER BY data DESC") { l += it.getLong(1) to it.getString(2) }
+        q("SELECT id, percorso, video_id FROM foto WHERE clip IS NULL ORDER BY data DESC") {
+            val id = it.getLong(1); l += id to (if (it.getLong(3) > 0) Percorsi.fotogramma(id).absolutePath else it.getString(2))
+        }
         return l
     }
 
@@ -234,7 +286,7 @@ object Db {
         return out
     }
 
-    fun conteggi() = Triple(n("SELECT COUNT(*) FROM foto").toInt(), n("SELECT COUNT(*) FROM volto WHERE manuale = 0").toInt(),
+    fun conteggi() = Triple(n("SELECT COUNT(*) FROM foto WHERE video_id = 0").toInt(), n("SELECT COUNT(*) FROM volto WHERE manuale = 0").toInt(),
         n("SELECT COUNT(*) FROM persona WHERE foto >= 2 OR (nome IS NOT NULL AND nome <> '')").toInt())
 
     fun voltiFoto(fotoId: Long): List<VoltoInfo> {
@@ -278,7 +330,8 @@ object Db {
     }
 
     fun ricontaInterno() {
-        u("UPDATE persona SET foto = (SELECT COUNT(DISTINCT foto_id) FROM volto WHERE persona_id = persona.id)")
+        // un video conta una volta sola, anche se la persona compare in molti suoi fotogrammi
+        u("UPDATE persona SET foto = (SELECT COUNT(DISTINCT CASE WHEN f.video_id > 0 THEN -f.video_id ELSE f.id END) FROM volto v JOIN foto f ON f.id = v.foto_id WHERE v.persona_id = persona.id)")
         u("UPDATE persona SET copertina = (SELECT id FROM volto WHERE persona_id = persona.id ORDER BY manuale, area DESC LIMIT 1) WHERE copertina IS NULL OR copertina NOT IN (SELECT id FROM volto WHERE persona_id = persona.id)")
         u("DELETE FROM persona WHERE foto = 0 AND (nome IS NULL OR nome = '')")
     }
@@ -340,7 +393,8 @@ object Db {
     }
 
     fun azzera() = tx {
-        u("DELETE FROM volto"); u("DELETE FROM foto"); u("DELETE FROM persona"); u("DELETE FROM riferimento")
+        u("DELETE FROM volto"); u("DELETE FROM foto"); u("DELETE FROM persona"); u("DELETE FROM riferimento"); u("DELETE FROM video")
         Percorsi.miniature.listFiles()?.forEach { it.delete() }; Percorsi.volti.listFiles()?.forEach { it.delete() }
+        Percorsi.fotogrammi.listFiles()?.forEach { it.delete() }
     }
 }

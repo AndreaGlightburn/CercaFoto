@@ -34,6 +34,9 @@ object Stato {
 
     /** false = parole chiave (come sul telefono), true = descrizione libera (CLIP) */
     val descrizione = MutableStateFlow(false)
+    /** null = tutto, "foto" = solo foto, "video" = solo video */
+    val tipo = MutableStateFlow<String?>(null)
+    val nVideo = MutableStateFlow(0)
     @Volatile private var vettori: Map<Long, FloatArray> = emptyMap()
 
     // ------------------------------------------------------------ filtri personalizzati
@@ -44,15 +47,19 @@ object Stato {
     val aggiuntaEsempi = MutableStateFlow<Long?>(null)
     fun vettoriClip() = vettori
 
-    private data class Richiesta(val q: String, val descr: Boolean, val filtro: Long?)
+    private data class Richiesta(val q: String, val descr: Boolean, val filtro: Long?, val tipo: String?)
+
+    private val PAROLE_VIDEO = setOf("video", "filmato", "filmati", "filmino", "filmini", "clip")
 
     /** Ricerca + filtri: i nomi dei filtri personalizzati scritti nella ricerca funzionano come parole chiave */
     private fun calcola(r: Richiesta, f: List<FotoIdx>, p: List<Persona>, fi: Filtri, fu: List<FiltroUtente>): List<FotoIdx> {
         var q = r.q
         val insiemi = ArrayList<Set<Long>>()
         fu.firstOrNull { it.id == r.filtro }?.let { insiemi += FiltriUtente.membri(it, vettori).map { m -> m.first }.toSet() }
+        var tipo = r.tipo
         if (!r.descr) {
             var qn = " " + Testo.normalizza(q) + " "
+            for (w in PAROLE_VIDEO) if (qn.contains(" $w ")) { tipo = "video"; qn = qn.replace(" $w ", " ") }
             for (x in fu.sortedByDescending { it.nome.length }) {
                 val n = Testo.normalizza(x.nome)
                 if (n.isNotEmpty() && qn.contains(" $n ")) { insiemi += FiltriUtente.membri(x, vettori).map { it.first }.toSet(); qn = qn.replace(" $n ", " ") }
@@ -63,11 +70,33 @@ object Stato {
             val perId = f.associateBy { it.id }
             runCatching { Clip.cerca(q.trim(), vettori) }.getOrDefault(emptyList()).mapNotNull { perId[it.first] }
         } else Ricerca.cerca(q, f, p)
-        return fi.applica(base.filter { x -> insiemi.all { x.id in it } })
+        val filtrate = fi.applica(base.filter { x -> insiemi.all { x.id in it } && (tipo == null || (tipo == "video") == x.isVideo) })
+        return comprimiVideo(filtrate)
+    }
+
+    /** Ogni video compare una volta sola: la prima voce rappresenta tutti i suoi fotogrammi presenti nella lista */
+    fun comprimiVideo(l: List<FotoIdx>): List<FotoIdx> {
+        val gruppi = LinkedHashMap<String, MutableList<FotoIdx>>()
+        val pos = HashMap<String, Int>()
+        val out = ArrayList<FotoIdx>(l.size)
+        for (f in l) {
+            val v = f.video
+            if (v == null) { out += f; continue }
+            val g = gruppi[v]
+            if (g == null) { gruppi[v] = mutableListOf(f); pos[v] = out.size; out += f } else g += f
+        }
+        for ((v, g) in gruppi) out[pos[v]!!] = g[0].copy(momenti = g.sortedBy { it.tempo }.map { it.id })
+        return out
+    }
+
+    /** Dagli id delle voci (anche raggruppate) a tutti gli id dei fotogrammi/foto che rappresentano */
+    fun espandi(ids: Collection<Long>, lista: List<FotoIdx>): List<Long> {
+        val per = lista.associateBy { it.id }
+        return ids.flatMap { per[it]?.momenti?.takeIf { m -> m.isNotEmpty() } ?: listOf(it) }.distinct()
     }
 
     val risultati: StateFlow<List<FotoIdx>> =
-        combine(combine(query, descrizione, filtroAttivo) { q, d, fa -> Richiesta(q, d, fa) }.debounce(300), foto, persone, filtri, filtriUtente) { r, f, p, fi, fu ->
+        combine(combine(query, descrizione, filtroAttivo, tipo) { q, d, fa, t -> Richiesta(q, d, fa, t) }.debounce(300), foto, persone, filtri, filtriUtente) { r, f, p, fi, fu ->
             calcola(r, f, p, fi, fu)
         }
             .flowOn(Dispatchers.Default)
@@ -89,7 +118,7 @@ object Stato {
         scope.launch {
             vettori = Db.vettoriClip()
             filtriUtente.value = FiltriUtente.tutti()
-            foto.value = Db.caricaFoto(); persone.value = Db.caricaPersone(); conteggi.value = Db.conteggi()
+            foto.value = Db.caricaFoto(); persone.value = Db.caricaPersone(); conteggi.value = Db.conteggi(); nVideo.value = Db.contaVideo()
         }
     }
 

@@ -27,12 +27,16 @@ object Impostazioni {
     var lato: Int
         get() = p.getProperty("lato", "150").toIntOrNull() ?: 150
         set(v) { p.setProperty("lato", v.toString()); salva() }
+    /** indicizza anche i video (fotogrammi chiave) */
+    var video: Boolean
+        get() = p.getProperty("video", "true") == "true"
+        set(v) { p.setProperty("video", v.toString()); salva() }
     var soglia: Float
         get() = p.getProperty("soglia", "0.5").toFloatOrNull() ?: 0.5f
         set(v) { p.setProperty("soglia", v.toString()); salva() }
 }
 
-data class Avanzamento(val attivo: Boolean = false, val fase: String = "", val fatte: Int = 0, val totale: Int = 0)
+data class Avanzamento(val attivo: Boolean = false, val fase: String = "", val fatte: Int = 0, val totale: Int = 0, val dettaglio: String = "")
 
 object Indicizzatore {
     private val ESTENSIONI = setOf("jpg", "jpeg", "png", "bmp", "gif", "webp")
@@ -42,7 +46,8 @@ object Indicizzatore {
 
     class FileFoto(val file: File, val cartella: String)
 
-    fun elenca(cartelle: List<String>): Pair<List<FileFoto>, Set<String>> {
+    /** Elenca foto (e video in [video], se richiesto) nelle cartelle; ritorna anche le cartelle raggiungibili */
+    fun elenca(cartelle: List<String>, video: MutableList<FileFoto>? = null): Pair<List<FileFoto>, Set<String>> {
         val out = ArrayList<FileFoto>()
         val raggiungibili = HashSet<String>()
         for (c in cartelle) {
@@ -50,8 +55,12 @@ object Indicizzatore {
             if (!radice.isDirectory) continue
             raggiungibili += c
             radice.walkTopDown().onEnter { !it.name.startsWith(".") && !it.isHidden || it == radice }
-                .filter { it.isFile && it.extension.lowercase() in ESTENSIONI && !it.name.startsWith(".") }
-                .forEach { out += FileFoto(it, c) }
+                .filter { it.isFile && !it.name.startsWith(".") }
+                .forEach {
+                    val e = it.extension.lowercase()
+                    if (e in ESTENSIONI) out += FileFoto(it, c)
+                    else if (video != null && e in Video.ESTENSIONI) video += FileFoto(it, c)
+                }
         }
         return out to raggiungibili
     }
@@ -73,7 +82,9 @@ object Indicizzatore {
     private suspend fun indicizza() {
         stato.value = Avanzamento(true, "lettura")
         val cartelle = Impostazioni.cartelle
-        val (file, raggiungibili) = elenca(cartelle)
+        val video = ArrayList<FileFoto>()
+        val conVideo = Impostazioni.video && Video.disponibile
+        val (file, raggiungibili) = elenca(cartelle, if (conVideo) video else null)
         val noti = Db.stati()
         val presenti = file.mapTo(HashSet()) { it.file.absolutePath }
         // via solo le foto sparite da cartelle raggiungibili (o da cartelle tolte dall'elenco)
@@ -102,7 +113,19 @@ object Indicizzatore {
                 }.awaitAll()
             }
         }
-        if (daFare.isNotEmpty() || rimosse.isNotEmpty()) {
+        // video: tolti quelli spariti, analizzati i nuovi o modificati
+        val notiV = Db.statiVideo()
+        val presentiV = video.mapTo(HashSet()) { it.file.absolutePath }
+        val rimossiV = notiV.filter { (p, s) -> p !in presentiV && (!conVideo || s.cartella == null || s.cartella in raggiungibili || s.cartella !in cartelle) }.map { it.value.id }
+        Db.rimuoviVideo(rimossiV)
+        val daFareV = video.filter { f -> notiV[f.file.absolutePath].let { it == null || it.modificata != f.file.lastModified() || it.dimensione != f.file.length() } }
+            .sortedByDescending { it.file.lastModified() }
+        for ((i, fv) in daFareV.withIndex()) {
+            if (!kotlinx.coroutines.currentCoroutineContext().isActive) break
+            stato.value = Avanzamento(true, "video", i, daFareV.size, fv.file.name)
+            runCatching { analizzaVideo(fv) }
+        }
+        if (daFare.isNotEmpty() || rimosse.isNotEmpty() || daFareV.isNotEmpty() || rimossiV.isNotEmpty()) {
             stato.value = Avanzamento(true, "volti")
             Raggruppa.esegui()
         }
@@ -127,11 +150,46 @@ object Indicizzatore {
         }
     }
 
+    /** Estrae i fotogrammi chiave di un video, li analizza come foto e scarta quelli quasi uguali al precedente */
+    private suspend fun analizzaVideo(fv: FileFoto) {
+        val f = fv.file
+        val info = Video.info(f) ?: return
+        val tmp = java.nio.file.Files.createTempDirectory("cercafoto_video").toFile()
+        try {
+            val quadri = Video.fotogrammi(f, tmp, info.durataMs, Video.intervallo(info.durataMs))
+            val inizio = info.creazione ?: f.lastModified()
+            val vid = Db.salvaVideo(f.absolutePath, fv.cartella, f.name, f.parentFile?.name ?: "", inizio, f.lastModified(), f.length(), info.durataMs, info.larg, info.alt)
+            if (quadri.isEmpty()) return
+            val risultati = withContext(pool) {
+                quadri.map { (img, ms) -> async { Triple(img, ms, runCatching { Analisi.analizza(img, 1600) }.getOrNull()) } }.awaitAll()
+            }
+            var precedente: Analisi.Risultato? = null
+            var salvati = 0
+            for ((img, ms, r) in risultati) {
+                if (r == null) continue
+                val pc = precedente?.clip; val c = r.clip
+                // scena praticamente identica alla precedente e stesso numero di volti: non serve tenerla
+                if (pc != null && c != null && pc.size == c.size && c.isNotEmpty() && dot(pc, c) > 0.95f && r.volti.size == precedente!!.volti.size) continue
+                val id = Db.salva("${f.absolutePath}#t=$ms", fv.cartella, f.name, f.parentFile?.name ?: "", inizio + ms, f.lastModified(), f.length(),
+                    r.volti, r.sorriso, r.colori, r.clip ?: (if (Clip.disponibile) FloatArray(0) else null), r.etichette)
+                Db.segnaFotogramma(id, vid, ms)
+                Percorsi.miniatura(id).writeBytes(r.miniatura)
+                runCatching { img.copyTo(Percorsi.fotogramma(id), overwrite = true) }
+                precedente = r; salvati++
+            }
+            Db.chiudiVideo(vid, salvati)
+        } finally {
+            tmp.deleteRecursively()
+        }
+    }
+
     /** Rianalisi in alta risoluzione delle foto con volti non assegnati a persone con nome */
     private suspend fun rianalizzaVolti() {
         val lista = ArrayList<Pair<Long, String>>()
-        Db.q("SELECT DISTINCT f.id, f.percorso FROM volto v JOIN foto f ON f.id = v.foto_id WHERE v.manuale = 0 AND v.persona_id <> ${Db.ESCLUSO} AND " +
-            "v.persona_id NOT IN (SELECT id FROM persona WHERE nome IS NOT NULL AND nome <> '')") { lista += it.getLong(1) to it.getString(2) }
+        Db.q("SELECT DISTINCT f.id, f.percorso, f.video_id FROM volto v JOIN foto f ON f.id = v.foto_id WHERE v.manuale = 0 AND v.persona_id <> ${Db.ESCLUSO} AND " +
+            "v.persona_id NOT IN (SELECT id FROM persona WHERE nome IS NOT NULL AND nome <> '')") {
+            val id = it.getLong(1); lista += id to (if (it.getLong(3) > 0) Percorsi.fotogramma(id).absolutePath else it.getString(2))
+        }
         val fatte = AtomicInteger(0)
         stato.value = Avanzamento(true, "volti_hd", 0, lista.size)
         withContext(pool) {

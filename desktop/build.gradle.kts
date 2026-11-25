@@ -35,6 +35,8 @@ compose.desktop {
             description = "Cerca Foto - ricerca locale delle foto"
             vendor = "Pony10"
             includeAllModules = true
+            // FFmpeg (build LGPL) per i video: scaricato dalla build in risorse/windows/ffmpeg
+            appResourcesRootDir.set(project.layout.projectDirectory.dir("risorse"))
             windows {
                 menuGroup = "Cerca Foto"
                 shortcut = true
