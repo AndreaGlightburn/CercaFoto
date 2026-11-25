@@ -311,3 +311,5 @@ Il file è JSON compresso con gzip:
 - Filtri personalizzati e ricerca libera anche su Android (+~200 MB).
 - Versione Linux (stesso codice desktop: basta un job CI con AppImage/.deb).
 - Analisi a ritagli per i dettagli piccoli (anelli, tatuaggi piccoli).
+- Video su Android (passo 2 del lavoro video): fotogrammi chiave con MediaMetadataRetriever/MediaCodec, analisi solo in carica; poi trascrizione del parlato (Whisper sul PC, modello leggero sul telefono) e video nel file di scambio.
+- **Raspberry Pi 5 (16 GB) — rimandato, da riprendere.** Fattibile con il codice desktop: serve una build Linux ARM64 (Compose/skiko e onnxruntime hanno aarch64; FFmpeg da apt). Consigliati SSD NVMe (non microSD) e raffreddamento attivo. Stima: 1–3 foto/s con CLIP, 1 h di video ≈ 15–30 min (H.264 decodificato in software, HEVC in hardware). Due strade da scegliere: (a) Pi usato come PC con monitor = solo build Linux ARM; (b) Pi come server sempre acceso con interfaccia web in LAN protetta da password, che indicizza di notte un disco con foto/video. Eventuale acceleratore Hailo AI HAT+ solo in un secondo momento (richiede conversione modelli in HEF).
