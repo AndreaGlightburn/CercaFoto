@@ -98,6 +98,15 @@ Realizza **Cerca Foto**: due app collegate per cercare le proprie foto per perso
   - uso come pulsanti ★ o come parola nella ricerca
   - esporta/importa `.cercafiltro` (JSON con i 512 pesi, senza foto)
 
+## Visore avanzato e video (entrambe le app)
+
+- **Visore**: zoom (pizzico, rotellina, doppio tocco), spostamento nella foto ingrandita con decodifica a piena risoluzione della sola zona visibile (rispettando l'orientamento EXIF), lente d'ingrandimento che segue dito o mouse, regolazioni di luce e colore con matrice colore (auto, luminosità, esposizione, contrasto, saturazione, calore, tonalità, B/N, seppia, negativo) e "salva una copia modificata". Codice condiviso in `Visione.kt`.
+- **Unione selettiva dei gruppi**: quando unisci un gruppo scegli quali foto portare; le altre restano dove sono.
+- **Video**: ogni fotogramma chiave diventa una riga di `foto` con `video_id` e `tempo`, così tutta l'analisi delle foto vale anche per i video.
+  - Windows: FFmpeg LGPL incluso (CI), solo fotogrammi chiave + cambi di scena, scarto dei quasi-duplicati via CLIP, riproduzione dal punto con VLC/ffplay.
+  - Android: `MediaMetadataRetriever` ogni pochi secondi, analisi **solo in carica** con un lavoro WorkManager vincolato al caricatore, lettore interno (VideoView) che parte dal minuto.
+  - Risultati raggruppati: un video = una voce con ▶ minuto e numero di momenti; filtro Tutto/Foto/Video; nelle persone un video conta una volta; i filtri personalizzati imparano anche dal momento preciso.
+
 ## Scambio `.cercafoto`
 
 JSON gzip con:

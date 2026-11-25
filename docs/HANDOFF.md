@@ -1,6 +1,6 @@
 # Cerca Foto — Handoff
 
-Stato del progetto al 21/11/2026. Autore delle app: **Pony10** (Andrea, IZ2OII). Repository privato: `github.com/AndreaGlightburn/CercaFoto`.
+Stato del progetto al 25/11/2026 (sezione 9 = novità: visore avanzato, unione selettiva, video). Autore delle app: **Pony10** (Andrea, IZ2OII). Repository privato: `github.com/AndreaGlightburn/CercaFoto`.
 
 Due app collegate che cercano le foto **solo in locale** (nessun dato in rete):
 
@@ -45,7 +45,7 @@ desktop/             Windows (progetto Gradle separato)
 NOTICE               licenze dei modelli
 ```
 
-**File condivisi, identici tra Android e Windows**: `Dizionario.kt`, `Ricerca.kt` (contiene anche `Filtri`) e `ScambioFormato.kt`. Se ne modifichi uno, copialo anche nell'altra app.
+**File condivisi, identici tra Android e Windows**: `Dizionario.kt`, `Ricerca.kt` (contiene anche `Filtri`), `ScambioFormato.kt` e `Visione.kt` (zoom, lente, regolazioni). Se ne modifichi uno, copialo anche nell'altra app.
 
 ---
 
@@ -57,7 +57,7 @@ NOTICE               licenze dei modelli
 |---|---|
 | `MainActivity.kt` | permessi (READ_MEDIA_IMAGES, accesso parziale, POST_NOTIFICATIONS, ACCESS_MEDIA_LOCATION), navigazione Cerca/Persone/Indice, visore, conferme di sistema (IntentSender), snackbar |
 | `AppVM.kt` | ViewModel: stato, ricerca con debounce, operazioni su persone, filtri, copia/sposta/elimina, esporta/importa, unità USB |
-| `Db.kt` | SQLiteOpenHelper **versione 6**, data class `FotoIdx`, `Persona`, `VoltoAttr`, `VoltoInfo` |
+| `Db.kt` | SQLiteOpenHelper **versione 7** (v7 = video), data class `FotoIdx`, `Persona`, `VoltoAttr`, `VoltoInfo` |
 | `Indicizzatore.kt` | `CoroutineWorker` in primo piano (dataSync): galleria via MediaStore + cartelle SAF, completamento versione, analisi, raggruppamento, rianalisi volti in alta risoluzione |
 | `Analizzatore.kt` | ML Kit (etichette, volti, testo) + FaceNet + età/sesso, attributi del volto |
 | `Colori.kt` | colori dominanti, colore di capelli e abiti (euristiche HSV) |
@@ -302,7 +302,8 @@ Il file è JSON compresso con gzip:
 - **Copie nella galleria Android**: finiscono sempre nella memoria interna (`VOLUME_EXTERNAL_PRIMARY`).
 - **Cartelle SAF aggiunte prima della build 1.0.3**: sono in sola lettura. Per spostare o eliminare file vanno riaggiunte.
 - **Windows: funzioni mancanti**: copia/sposta/elimina file, OCR, HEIC.
-- **Dimensioni**: APK ~97 MB, MSI ~370 MB (`includeAllModules` + onnxruntime per tutti i sistemi operativi: si può alleggerire).
+- **Video**: non ancora provati su un telefono vero (MediaMetadataRetriever, rotazione dei fotogrammi, lavoro "in carica") né sull'interfaccia Windows; il motore Windows è stato provato in jshell (vedi 9.3).
+- **Dimensioni**: APK ~97 MB, MSI ~430 MB con FFmpeg (`includeAllModules` + onnxruntime per tutti i sistemi operativi: si può alleggerire).
 
 ## 8. Idee già discusse e non ancora fatte
 
@@ -311,5 +312,50 @@ Il file è JSON compresso con gzip:
 - Filtri personalizzati e ricerca libera anche su Android (+~200 MB).
 - Versione Linux (stesso codice desktop: basta un job CI con AppImage/.deb).
 - Analisi a ritagli per i dettagli piccoli (anelli, tatuaggi piccoli).
-- Video su Android (passo 2 del lavoro video): fotogrammi chiave con MediaMetadataRetriever/MediaCodec, analisi solo in carica; poi trascrizione del parlato (Whisper sul PC, modello leggero sul telefono) e video nel file di scambio.
+- Video, passi successivi: trascrizione del parlato (Whisper sul PC, modello leggero sul telefono) e video nel file di scambio (abbinamento per nome del video + istante).
 - **Raspberry Pi 5 (16 GB) — rimandato, da riprendere.** Fattibile con il codice desktop: serve una build Linux ARM64 (Compose/skiko e onnxruntime hanno aarch64; FFmpeg da apt). Consigliati SSD NVMe (non microSD) e raffreddamento attivo. Stima: 1–3 foto/s con CLIP, 1 h di video ≈ 15–30 min (H.264 decodificato in software, HEVC in hardware). Due strade da scegliere: (a) Pi usato come PC con monitor = solo build Linux ARM; (b) Pi come server sempre acceso con interfaccia web in LAN protetta da password, che indicizza di notte un disco con foto/video. Eventuale acceleratore Hailo AI HAT+ solo in un secondo momento (richiede conversione modelli in HEF).
+
+---
+
+## 9. Novità del 25/11/2026
+
+### 9.1 Visore avanzato (Android e Windows)
+
+- `Visione.kt` (condiviso): `ZoomStato` + `VistaZoom` (Canvas Compose) e `Regolazioni` + `PannelloRegolazioni`.
+  - Zoom: pizzico, rotellina (desktop), doppio tocco/clic (adatta ↔ max(2.5, 1:1)), massimo = 4 pixel schermo per pixel originale. Spostamento solo se ingrandita (dopo touchSlop), limiti ai bordi.
+  - **Dettaglio a piena risoluzione**: oltre la risoluzione dell'anteprima (2048 Android, 2400 PC) dopo 220 ms decodifica solo la zona visibile (+20%) con passo potenza di 2. Android: `BitmapRegionDecoder` su `ParcelFileDescriptor` (`VisoreZoom.kt`), PC: `ImageReader.sourceRegion` (`Immagini.zona`). `rettangoloGrezzo` converte le coordinate per gli orientamenti EXIF 1/3/6/8 (specchiati: niente dettaglio).
+  - **Lente** ×2.5, raggio 80 dp: segue il dito (disegnata sopra il dito) o il mouse; con la lente il pager Android non scorre.
+  - **Regolazioni** con matrice colore 4×5: auto-livelli per canale (percentili 0.4/99.6 sull'anteprima), esposizione 2^(1.5e), luminosità ±80, contrasto, saturazione (luminanza Rec.709), tonalità (rotazione), calore, effetti B/N, seppia, negativo. Solo visualizzazione; "Salva una copia modificata": Android in `Pictures/CercaFoto/` (max 4096 px, a righe di 64), PC accanto all'originale `…_modificata.jpg` (piena risoluzione, in place).
+  - PC: tasti +/−/0, frecce = sposta se ingrandita (Pag su/giù cambia foto), L = lente, Esc a scalare.
+
+### 9.2 Unione selettiva dei gruppi (Android e Windows)
+
+`DialogoUnioneSelettiva`: usata da "Potrebbe essere anche…", "Unisci a…" e "nome già esistente". Parte con tutte le foto selezionate; se restano tutte → `unisci`, altrimenti `spostaFoto` delle sole scelte.
+
+### 9.3 Video
+
+**Modello dati (entrambe)**: ogni fotogramma chiave è una riga di `foto` con `video_id` e `tempo` (ms); tabella `video` (percorso/uri, durata, data, modificata, cartella, volume, fotogrammi). L'immagine del fotogramma è salvata dall'app (PC `%LOCALAPPDATA%\CercaFoto\fotogrammi\{id}.jpg`, Android `filesDir/fotogrammi/{-id}.jpg`, id = `idEsterno("v:<uri>#<ms>")` negativo). Così volti, persone, etichette, colori, OCR, CLIP e filtri funzionano senza codice nuovo.
+- `FotoIdx`: `video`, `tempo`, `durata`, `momenti` (+ `isVideo`); sul PC `file` = fotogramma, `fileVideo` = filmato.
+- I fotogrammi sono esclusi dalla scansione/rimozione delle foto (`video_id = 0`), dai conteggi delle foto e dallo scambio `.cercafoto` (export e import).
+- `ricontaInterno`: un video conta una volta sola per persona.
+- **Raggruppamento**: `comprimiVideo` (Stato/AppVM) → ogni video una voce, la prima in classifica, con `momenti` = tutti i suoi fotogrammi nella lista; `espandi` per le operazioni su persone (togli, sposta, nuova persona, unione selettiva) e per le esclusioni dei filtri.
+- Ricerca: filtro Tutto/Foto/Video; le parole "video, filmato/i, filmino/i" (e "clip" sul PC) attivano il filtro video.
+
+**Windows** (`Video.kt`):
+- FFmpeg build **LGPL shared** di BtbN (`ffmpeg-master-latest-win64-lgpl-shared.zip`) scaricata in CI in `desktop/risorse/windows/ffmpeg` (`appResourcesRootDir`), letta da `compose.application.resources.dir`; in sviluppo usa l'ffmpeg nel PATH. La CI prova l'estrazione su un video generato.
+- `info`: parsing di `ffmpeg -i` (durata, dimensioni con rotazione, `creation_time`).
+- Estrazione: `-skip_frame nokey` (solo fotogrammi chiave, velocissimo) + `select='isnan(prev_selected_t)+gte(t-prev_selected_t,IV)+gt(scene,0.3)*gte(t-prev_selected_t,1.5)'`, scala max 1600, `showinfo` per i tempi, `-fps_mode vfr`. IV = max(3 s, durata/600). Se i fotogrammi chiave sono troppo radi rifà senza `-skip_frame`.
+- Analisi parallela dei fotogrammi; scarta quelli con CLIP > 0.95 rispetto al precedente e stesso numero di volti.
+- Riproduzione dal punto: VLC (`--start-time`) se installato, altrimenti `ffplay -ss`, altrimenti app predefinita.
+- Visore: "Momenti del video" (clic = mostra quel momento), "▶ Riproduci da…"; copia modificata salvata come `video_mm-ss_modificata.jpg`.
+- Filtri: pagina del filtro con video raggruppati; nel visore "È un esempio di… / Non è…" sul momento preciso (anche per le foto).
+- Impostazione `video` (interruttore in Cartelle).
+- **Verificato in jshell** con la build: video di prova (persona, caffè, gatto, persona) → 4 momenti, volto nello stesso gruppo della foto (persona = 2 elementi), "gatto"/"caffè"/"tazza" e descrizione libera trovano il secondo giusto.
+
+**Android**:
+- Permesso `READ_MEDIA_VIDEO` (chiesto all'avvio e con un pulsante nella scheda Indice per chi aggiorna).
+- Sorgenti: `MediaStore.Video` + video nelle cartelle SAF (`leggiCartella(…, video)`).
+- `MediaMetadataRetriever.getScaledFrameAtTime(OPTION_CLOSEST_SYNC, 1280)` ogni max(3 s, durata/300); ruota il fotogramma se il dispositivo non lo fa; data da `METADATA_KEY_DATE`; scarta i fotogrammi con impronta 16×16 quasi uguale e stesso numero di volti.
+- **Solo in carica** (salvo "Anche senza caricatore"): se non è in carica il lavoro normale salta i video e accoda `indicizza_video` (stesso worker, `solo_video=true`, vincolo `setRequiresCharging`); un `Mutex` evita due analisi video insieme; il numero in attesa è nelle preferenze e mostrato in Indice.
+- `caricaBitmap` gestisce gli uri `file://` dei fotogrammi (miniature volti, rianalisi HD).
+- Visore: ▶ in alto e "Riproduci da…" → `LettoreVideo` (VideoView + MediaController, `seekTo(SEEK_CLOSEST)`); fila dei momenti (tocco = riproduci da lì, in giallo quelli trovati); "Apri video"; condividi manda il filmato; copia/sposta/elimina non si applicano ai video.
