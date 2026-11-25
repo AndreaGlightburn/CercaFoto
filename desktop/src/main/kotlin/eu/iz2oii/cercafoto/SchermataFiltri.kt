@@ -100,7 +100,7 @@ fun SchermataFiltro(id: Long, finestra: java.awt.Window, apriFoto: (List<FotoIdx
     val f = filtri.firstOrNull { it.id == id }
     if (f == null) { LaunchedEffect(Unit) { indietro() }; return }
     val perId = remember(foto) { foto.associateBy { it.id } }
-    val membri = remember(f, foto) { FiltriUtente.membri(f, Stato.vettoriClip()).mapNotNull { perId[it.first] } }
+    val membri = remember(f, foto) { Stato.comprimiVideo(FiltriUtente.membri(f, Stato.vettoriClip()).mapNotNull { perId[it.first] }) }
     var sel by remember(id) { mutableStateOf(setOf<Long>()) }
     var rinomina by remember { mutableStateOf(false) }
     var elimina by remember { mutableStateOf(false) }
@@ -132,10 +132,10 @@ fun SchermataFiltro(id: Long, finestra: java.awt.Window, apriFoto: (List<FotoIdx
             ZoomAnteprime()
         }
         Row(Modifier.padding(vertical = 4.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(if (sel.isEmpty()) "${membri.size} foto trovate, dalla più pertinente · tieni premuto sulle foto sbagliate per escluderle"
+            Text(if (sel.isEmpty()) "${membri.size} foto e video trovati, dai più pertinenti · tieni premuto su quelli sbagliati per escluderli (per un video escludi tutti i suoi momenti trovati; per sceglierne uno solo aprilo)"
                 else "${sel.size} selezionate", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
             if (sel.isNotEmpty()) {
-                Button({ Stato.correggiFiltro(f.id, sel, positivi = false); sel = emptySet() }) { Text("Non c'entrano: escludi") }
+                Button({ Stato.correggiFiltro(f.id, Stato.espandi(sel, membri), positivi = false); sel = emptySet() }) { Text("Non c'entrano: escludi") }
                 Spacer(Modifier.width(6.dp))
                 OutlinedButton({ Stato.correggiFiltro(f.id, sel, positivi = true); sel = emptySet() }) { Text("Sono esempi perfetti") }
                 TextButton({ sel = emptySet() }) { Text("Annulla") }

@@ -357,6 +357,24 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             for (a in f.attr) Text("• " + descriviVolto(a, persone), style = MaterialTheme.typography.bodySmall)
             TextButton({ aggiungi = true }) { Text("Aggiungi a una persona…") }
             if (f.colori.isNotEmpty()) Text("Colori: " + f.colori.entries.sortedByDescending { it.value }.take(4).joinToString(", ") { "${it.key} ${it.value}%" }, style = MaterialTheme.typography.bodySmall)
+            val filtriU by Stato.filtriUtente.collectAsState()
+            if (filtriU.isNotEmpty() && Clip.disponibile) {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Text("Filtri personalizzati", fontWeight = FontWeight.Bold)
+                Text(if (f.isVideo) "Insegna a un filtro usando proprio questo momento del video (${tempoVideo(f.tempo)})."
+                    else "Insegna a un filtro usando questa foto.", style = MaterialTheme.typography.bodySmall)
+                Row {
+                    for ((giusto, testo) in listOf(true to "È un esempio di…", false to "Non è…")) {
+                        var menu by remember { mutableStateOf(false) }
+                        Box {
+                            TextButton({ menu = true }) { Text(testo) }
+                            DropdownMenu(menu, { menu = false }) {
+                                for (x in filtriU) DropdownMenuItem({ Text(x.nome) }, { menu = false; Stato.correggiFiltro(x.id, listOf(f.id), positivi = giusto) })
+                            }
+                        }
+                    }
+                }
+            }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
             PannelloRegolazioni(
                 reg, { reg = it },
