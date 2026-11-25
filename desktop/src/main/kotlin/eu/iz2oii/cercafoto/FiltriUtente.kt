@@ -133,9 +133,10 @@ object FiltriUtente {
 
     /** Nuovo filtro partendo da una zona scelta nel visore */
     fun nuovoDaZona(nome: String, foto: Long, l: Float, t: Float, r: Float, b: Float, v: FloatArray, vettori: Map<Long, FloatArray>): Long {
-        val id = salva(FiltroUtente(0, nome, "esempi", 0.28f, FloatArray(0), 0f, emptyList(), emptySet(), emptySet(), true))
+        // sensibilità iniziale tarata su ImageNet con oggetti piccoli incollati (0.22: ~2/3 trovati, pochi intrusi)
+        val id = salva(FiltroUtente(0, nome, "esempi", 0.22f, FloatArray(0), 0f, emptyList(), emptySet(), emptySet(), true))
         Db.nuovoEsempioZona(id, foto, l, t, r, b, true, v)
-        return runCatching { daEsempi(id, nome, emptySet(), emptySet(), vettori, dettagli = true) }.getOrElse { elimina(id); throw it }
+        return runCatching { daEsempi(id, nome, emptySet(), emptySet(), vettori, 0.22f, dettagli = true) }.getOrElse { elimina(id); throw it }
     }
 
     fun daDescrizione(id: Long, nome: String, frasi: List<String>, soglia: Float = 0.22f): Long {

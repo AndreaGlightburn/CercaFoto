@@ -180,7 +180,7 @@ object Clip {
     fun cerca(descrizione: String, vettori: Map<Long, FloatArray>, zone: Map<Long, Zone> = emptyMap()): List<Pair<Long, Float>> {
         val q = ultimaQuery?.takeIf { it.first == descrizione }?.second ?: testo(listOf(descrizione)).first().also { ultimaQuery = descrizione to it }
         // con le zone: conta anche il dettaglio migliore della foto (leggermente penalizzato)
-        val p = vettori.map { (id, v) -> id to maxOf(dot(q, v), (zone[id]?.takeIf { it.n > 0 }?.massimo(q) ?: -1f) - 0.012f) }.sortedByDescending { it.second }
+        val p = vettori.map { (id, v) -> id to maxOf(dot(q, v), (zone[id]?.takeIf { it.n > 0 }?.massimo(q) ?: -1f) - 0.02f) }.sortedByDescending { it.second }
         val best = p.firstOrNull()?.second ?: return emptyList()
         return p.filter { it.second >= 0.215f && it.second >= best - 0.06f }.take(1000)
     }
