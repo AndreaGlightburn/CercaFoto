@@ -681,8 +681,15 @@ fun SchermataIndice(finestra: java.awt.Window) {
                 if (cartelle.isEmpty()) Text("Nessuna cartella: aggiungine una per iniziare (es. Immagini).", Modifier.padding(vertical = 8.dp))
                 for (c in cartelle) Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(c + if (!File(c).isDirectory) "  (non raggiungibile)" else "", Modifier.weight(1f))
+                    var port by remember(c) { mutableStateOf(Impostazioni.portatile(c)) }
+                    Checkbox(port, { port = it; Impostazioni.setPortatile(c, it); if (it) Stato.scriviPortatile(c) })
+                    Text("Indice sul disco", style = MaterialTheme.typography.bodySmall)
+                    if (port) TextButton({ Stato.scriviPortatile(c) }, enabled = !av.attivo && File(c).isDirectory) { Text("Aggiorna ora") }
                     IconButton({ Stato.rimuoviCartella(c) }) { Icon(Icons.Default.Close, "Rimuovi") }
                 }
+                if (cartelle.isNotEmpty()) Text("«Indice sul disco» salva i risultati dell'analisi nella cartella nascosta .cercafoto alla radice della cartella " +
+                    "(solo dati, niente foto). Se colleghi lo stesso disco al telefono, Cerca Foto per Android li usa invece di rianalizzare; vale anche al contrario.",
+                    style = MaterialTheme.typography.bodySmall)
                 Button({
                     val ch = JFileChooser().apply { fileSelectionMode = JFileChooser.DIRECTORIES_ONLY; dialogTitle = "Scegli una cartella con le foto" }
                     if (ch.showOpenDialog(finestra) == JFileChooser.APPROVE_OPTION) Stato.aggiungiCartella(ch.selectedFile)
@@ -701,7 +708,9 @@ fun SchermataIndice(finestra: java.awt.Window) {
                         LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
                     }
                     av.attivo -> { Text("Lettura delle cartelle…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
-                    else -> Text("Indice aggiornato. All'avvio l'app controlla le foto nuove o modificate.")
+                    av.attivo && av.fase == "portatile" -> { Text("Salvo l'indice sul disco: ${av.dettaglio}…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                    else -> Text("Indice aggiornato. All'avvio l'app controlla le foto nuove o modificate." +
+                        if (Indicizzatore.ultimoDalIndice > 0) " Nell'ultimo aggiornamento ${Indicizzatore.ultimoDalIndice} foto sono state riprese dall'indice sul disco, senza rianalizzarle." else "")
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                     if (av.attivo) OutlinedButton({ Stato.ferma() }) { Text("Ferma") } else Button({ Stato.indicizza() }) { Text("Aggiorna indice") }

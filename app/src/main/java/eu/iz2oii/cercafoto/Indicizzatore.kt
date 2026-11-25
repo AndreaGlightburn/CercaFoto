@@ -27,6 +27,8 @@ import java.util.Locale
 class MediaFoto(
     val id: Long, val data: Long, val modificata: Long, val nome: String, val album: String,
     val uri: Uri? = null, val cartella: String? = null, val volume: String? = null,
+    /** byte (solo cartelle esterne: serve per l'indice portatile) */
+    val dimensione: Long = -1,
 ) {
     val uriEffettivo: Uri get() = uri ?: uriFoto(id)
     val uriEffettivoVideo: Uri get() = uri ?: android.content.ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
@@ -156,7 +158,7 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
         }
 
         /** Visita ricorsiva di una cartella scelta col selettore. Ritorna null se non è accessibile (unità scollegata). */
-        fun leggiCartella(ctx: Context, tree: String, video: MutableList<MediaFoto>? = null): List<MediaFoto>? = runCatching {
+        fun leggiCartella(ctx: Context, tree: String, video: MutableList<MediaFoto>? = null, indici: MutableList<Uri>? = null): List<MediaFoto>? = runCatching {
             val treeUri = Uri.parse(tree)
             val out = ArrayList<MediaFoto>()
             val coda = ArrayDeque<Pair<String, String>>()
@@ -164,7 +166,8 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
             coda.addLast(radice to radice.substringAfterLast('/').substringAfterLast(':'))
             val proj = arrayOf(
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                DocumentsContract.Document.COLUMN_SIZE
             )
             var visitate = 0
             while (coda.isNotEmpty() && visitate < 20000) {
@@ -175,16 +178,24 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
                 c.use {
                     while (it.moveToNext()) {
                         val id = it.getString(0); val nome = it.getString(1) ?: ""; val mime = it.getString(2) ?: ""
+                        val dim = if (it.isNull(4)) -1L else it.getLong(4)
+                        // indice portatile scritto dall'altro dispositivo
+                        if (indici != null && nome == IndicePortatile.CARTELLA && mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                            ctx.contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, id), proj, null, null, null)?.use { k ->
+                                while (k.moveToNext()) if (IndicePortatile.eIndice(k.getString(1) ?: "")) indici += DocumentsContract.buildDocumentUriUsingTree(treeUri, k.getString(0))
+                            }
+                            continue
+                        }
                         if (nome.startsWith(".")) continue
                         if (mime == DocumentsContract.Document.MIME_TYPE_DIR) coda.addLast(id to nome)
                         else if (mime.startsWith("image/")) {
                             val u = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
                             val mod = if (it.isNull(3)) 0L else it.getLong(3)
-                            out += MediaFoto(idEsterno(u.toString()), mod, mod / 1000, nome, album, u, tree)
+                            out += MediaFoto(idEsterno(u.toString()), mod, mod / 1000, nome, album, u, tree, dimensione = dim)
                         } else if (video != null && mime.startsWith("video/")) {
                             val u = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
                             val mod = if (it.isNull(3)) 0L else it.getLong(3)
-                            video += MediaFoto(idEsterno(u.toString()), mod, mod / 1000, nome, album, u, tree)
+                            video += MediaFoto(idEsterno(u.toString()), mod, mod / 1000, nome, album, u, tree, dimensione = dim)
                         }
                     }
                 }
@@ -237,7 +248,8 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
      * Di norma solo in carica: altrimenti rimanda tutto a un lavoro che parte da solo col caricatore.
      * Ritorna true se l'indice è cambiato.
      */
-    private suspend fun fasevideo(db: Db, video: List<MediaFoto>, raggiungibili: Set<String>, soloInCarica: Boolean): Boolean {
+    private suspend fun fasevideo(db: Db, video: List<MediaFoto>, raggiungibili: Set<String>, soloInCarica: Boolean,
+                                  indici: Map<String, Portatile.Indici> = emptyMap(), mappe: Map<String, Map<String, Long>> = emptyMap()): Boolean {
         if (!Impostazioni.video(ctx)) return false
         val cartelle = Impostazioni.cartelle(ctx)
         val noti = db.statiVideo()
@@ -247,8 +259,15 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
             v.id !in presenti && if (v.cartella == null) (v.volume == null || v.volume in montati) else (v.cartella in raggiungibili || v.cartella !in cartelle)
         }.map { it.id }
         db.rimuoviVideo(tolti)
-        val daFare = video.filter { noti[it.id]?.modificata != it.modificata }.sortedByDescending { it.data }
+        val tutti = video.filter { noti[it.id]?.modificata != it.modificata }.sortedByDescending { it.data }
+        // video già analizzati dall'altro dispositivo: si estraggono solo le immagini dei momenti, subito (niente analisi)
+        var importati = 0
+        val daFare = tutti.filter { m ->
+            val vp = m.cartella?.let { c -> indici[c]?.let { ix -> m.uri?.let { u -> Portatile.relativo(c, u) }?.let { rel -> ix.video(rel, m.dimensione) } } }
+            if (vp != null && !isStopped && runCatching { importaVideo(db, m, vp, mappe[m.cartella] ?: emptyMap()) }.isSuccess) { importati++; false } else true
+        }
         Impostazioni.setVideoInAttesa(ctx, daFare.size)
+        if (importati > 0 && daFare.isEmpty()) return true
         if (daFare.isEmpty()) return tolti.isNotEmpty()
         if (soloInCarica && !inCarica(ctx) && !Impostazioni.videoSempre(ctx)) { avviaVideoInCarica(ctx); return tolti.isNotEmpty() }
         if (!lucchettoVideo.tryLock()) return tolti.isNotEmpty()
@@ -312,6 +331,40 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
         } finally { runCatching { mmr.release() } }
     }
 
+    /** Video presente nell'indice portatile: ricrea i fotogrammi ai tempi indicati con l'analisi già fatta */
+    private fun importaVideo(db: Db, m: MediaFoto, vp: IndicePortatile.VideoP, persone: Map<String, Long>) {
+        val mmr = android.media.MediaMetadataRetriever()
+        try {
+            mmr.setDataSource(ctx, m.uriEffettivoVideo)
+            val rot = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            val vw = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val vh = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val orizzontale = if (rot % 180 == 90) vh > vw else vw > vh
+            db.salvaVideo(m, vp.durata)
+            val inizio = if (vp.d > 0) vp.d else m.data
+            var n = 0
+            for (mo in vp.momenti) {
+                if (isStopped) break
+                var bmp = (if (android.os.Build.VERSION.SDK_INT >= 27)
+                    mmr.getScaledFrameAtTime(mo.t * 1000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 1280, 1280)
+                else mmr.getFrameAtTime(mo.t * 1000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)) ?: continue
+                if (rot % 180 == 90 && vw != vh && (bmp.width > bmp.height) != orizzontale)
+                    bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, android.graphics.Matrix().apply { postRotate(rot.toFloat()) }, true)
+                val id = idEsterno("v:${m.uriEffettivoVideo}#${mo.t}")
+                val file = db.fileFotogramma(id)
+                runCatching { file.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 88, it) } }
+                bmp.recycle()
+                val fm = MediaFoto(id, inizio + mo.t, m.modificata, m.nome, m.album, Uri.fromFile(file))
+                val r = Portatile.risultato(mo.foto).also { it.dataExif = inizio + mo.t }
+                db.salva(fm, r)
+                db.segnaFotogramma(id, m.id, mo.t)
+                Portatile.applicaPersone(db, id, mo.foto, persone)
+                n++
+            }
+            db.chiudiVideo(m.id, n)
+        } finally { runCatching { mmr.release() } }
+    }
+
     /** impronta 16x16 in grigi per riconoscere scene uguali */
     private fun firma(b: Bitmap): IntArray {
         val p = Bitmap.createScaledBitmap(b, 16, 16, true)
@@ -331,8 +384,11 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
         if (inputData.getBoolean("solo_video", false)) {
             val video = ArrayList(leggiVideo(ctx))
             val ragg = HashSet<String>()
-            for (c in Impostazioni.cartelle(ctx)) if (leggiCartella(ctx, c, video) != null) ragg += c
-            if (fasevideo(db, video, ragg, soloInCarica = false) && !isStopped) {
+            val trov = HashMap<String, MutableList<Uri>>()
+            for (c in Impostazioni.cartelle(ctx)) if (leggiCartella(ctx, c, video, trov.getOrPut(c) { mutableListOf() }) != null) ragg += c
+            val ix = HashMap<String, Portatile.Indici>(); val mp = HashMap<String, Map<String, Long>>()
+            for ((c, l) in trov) if (l.isNotEmpty()) Portatile.carica(ctx, c, l)?.let { x -> ix[c] = x; mp[c] = Portatile.mappaPersone(db, x) }
+            if (fasevideo(db, video, ragg, soloInCarica = false, ix, mp) && !isStopped) {
                 progresso("volti", 0, 0, "Raggruppo i volti…")
                 Raggruppa.esegui(ctx)
             }
@@ -369,8 +425,18 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
         val video = ArrayList(if (Impostazioni.video(ctx)) leggiVideo(ctx) else emptyList())
         val cartelle = Impostazioni.cartelle(ctx)
         val raggiungibili = HashSet<String>()
+        val trovati = HashMap<String, MutableList<Uri>>()
         for (c in cartelle) {
-            leggiCartella(ctx, c, if (Impostazioni.video(ctx)) video else null)?.let { galleria += it; raggiungibili += c }
+            leggiCartella(ctx, c, if (Impostazioni.video(ctx)) video else null, trovati.getOrPut(c) { mutableListOf() })?.let { galleria += it; raggiungibili += c }
+        }
+        // indici portatili (scritti dal PC sul disco): le foto già analizzate lì non vengono rianalizzate
+        val indici = HashMap<String, Portatile.Indici>()
+        val mappe = HashMap<String, Map<String, Long>>()
+        for ((c, l) in trovati) if (l.isNotEmpty()) Portatile.carica(ctx, c, l)?.let { ix -> indici[c] = ix; mappe[c] = Portatile.mappaPersone(db, ix) }
+        fun scriviIndici() {
+            for (c in raggiungibili) runCatching {
+                Portatile.scrivi(ctx, db, c, galleria.filter { it.cartella == c && it.dimensione >= 0 }.associate { it.id to it.dimensione })
+            }
         }
         val gia = db.modifiche()
         val esterne = db.fotoEsterne()
@@ -414,8 +480,18 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
         if (tot > 0 && !isStopped) {
             cambiato = true
             Analizzatore(ctx, Impostazioni.ocr(ctx)).use { an ->
+                var usate = 0
                 for ((i, m) in daFare.withIndex()) {
                     if (isStopped) break
+                    val x = m.cartella?.let { c -> indici[c]?.let { ix -> m.uri?.let { u -> Portatile.relativo(c, u) }?.let { rel -> ix.foto(rel, m.dimensione) } } }
+                    if (x != null && runCatching { Portatile.usa(db, m, x, mappe[m.cartella] ?: emptyMap()) }.isSuccess) {
+                        usate++
+                        if (i % 20 == 0 || i == tot - 1) {
+                            setProgress(workDataOf("fase" to "analisi", "fatte" to i + 1, "totale" to tot))
+                            runCatching { nm.notify(NOTIFICA, notifica("Foto ${i + 1} di $tot (dall'indice del disco)", i + 1, tot)) }
+                        }
+                        continue
+                    }
                     val r = runCatching {
                         val bmp = carica(m.uriEffettivo)
                         an.analizza(bmp).also { bmp.recycle() }
@@ -427,14 +503,20 @@ class Indicizzatore(private val ctx: Context, p: WorkerParameters) : CoroutineWo
                         runCatching { nm.notify(NOTIFICA, notifica("Foto ${i + 1} di $tot", i + 1, tot)) }
                     }
                 }
+                ctx.getSharedPreferences("impostazioni", Context.MODE_PRIVATE).edit().putInt("portatile_usate", usate).apply()
             }
         }
         // 3) Video (solo in carica, salvo diversa impostazione)
-        if (!isStopped && fasevideo(db, video, raggiungibili, soloInCarica = true)) cambiato = true
-        if (isStopped || !cambiato) return@withContext Result.success()
+        if (!isStopped && fasevideo(db, video, raggiungibili, soloInCarica = true, indici, mappe)) cambiato = true
+        if (isStopped) return@withContext Result.success()
+        if (!cambiato) { scriviIndici(); return@withContext Result.success() }
         setProgress(workDataOf("fase" to "volti", "fatte" to 0, "totale" to 0))
         runCatching { nm.notify(NOTIFICA, notifica("Raggruppo i volti…", 0, 0)) }
         Raggruppa.esegui(ctx)
+        if (!isStopped) {
+            setProgress(workDataOf("fase" to "portatile", "fatte" to 0, "totale" to 0))
+            scriviIndici()
+        }
         Result.success()
     }
 }

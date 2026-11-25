@@ -47,6 +47,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -1275,6 +1276,7 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
                         Text("Aggiorno le foto già analizzate (colori, età, capelli, abiti): ${av.fatte} di ${av.totale}")
                         LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
                     }
+                    av.attivo && av.fase == "portatile" -> { Text("Salvo l'indice sul disco per il PC…"); LinearProgressIndicator(Modifier.fillMaxWidth()) }
                     av.attivo && av.fase == "video" && av.totale > 0 -> {
                         Text("Analisi video ${av.fatte + 1} di ${av.totale}")
                         LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
@@ -1347,9 +1349,20 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
                 for (c in cartelle) Row(verticalAlignment = Alignment.CenterVertically) {
                     val uuid = Unita.uuidDi(c)
                     val scollegata = uuid != null && uuid != "primary" && uuid != "home" && uuid !in collegate
-                    Text(nomeCartella(c) + if (scollegata) "  (scollegata)" else "", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                    Column(Modifier.weight(1f)) {
+                        Text(nomeCartella(c) + if (scollegata) "  (scollegata)" else "", style = MaterialTheme.typography.bodyMedium)
+                        var port by remember(c) { mutableStateOf(Portatile.attivo(ctx, c)) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Switch(port, { port = it; Portatile.setAttivo(ctx, c, it); if (it) Indicizzatore.avvia(ctx, sostituisci = true) }, Modifier.scale(0.8f))
+                            Text("Salva l'indice sul disco per il PC", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Portatile.errore(ctx, c)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+                    }
                     IconButton({ vm.rimuoviCartella(c) }) { Icon(Icons.Default.Close, "Rimuovi") }
                 }
+                if (cartelle.isNotEmpty()) Text("Se sul disco c'è l'indice salvato da Cerca Foto per Windows (cartella nascosta .cercafoto), le foto già analizzate dal PC " +
+                    "vengono riprese senza rianalizzarle" + (if (Portatile.usate(ctx) > 0) ": nell'ultimo aggiornamento ${Portatile.usate(ctx)}." else ".") +
+                    " Con l'interruttore acceso il telefono salva a sua volta l'indice per il PC.", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton({ sceltaCartella.launch(null) }) { Text("Aggiungi cartella o unità esterna") }
                 Text("Se scolleghi l'unità, le sue foto restano cercabili; per aprirle va ricollegata.", style = MaterialTheme.typography.bodySmall)
             }

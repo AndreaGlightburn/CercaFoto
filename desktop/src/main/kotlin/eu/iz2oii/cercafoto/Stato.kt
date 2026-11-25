@@ -141,6 +141,13 @@ object Stato {
     fun indicizza(rianalisiVolti: Boolean = false) = Indicizzatore.avvia(scope, { ricarica() }, rianalisiVolti)
     fun ferma() = Indicizzatore.ferma()
 
+    /** Scrive subito l'indice portatile nella radice della cartella */
+    fun scriviPortatile(c: String) = sfondo("Scrivo l'indice sul disco…") {
+        if (!File(c).isDirectory) "Cartella non raggiungibile: collega il disco"
+        else { Indicizzatore.aggiornaPortatili(listOf(c), forza = true); Indicizzatore.stato.value = Avanzamento()
+            "Indice salvato in ${Portatile.file(File(c)).absolutePath}" }
+    }
+
     fun aggiungiCartella(c: File) {
         val l = (Impostazioni.cartelle + c.absolutePath).distinct()
         Impostazioni.cartelle = l; cartelle.value = l

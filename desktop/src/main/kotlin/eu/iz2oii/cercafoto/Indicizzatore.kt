@@ -31,6 +31,18 @@ object Impostazioni {
     var video: Boolean
         get() = p.getProperty("video", "true") == "true"
         set(v) { p.setProperty("video", v.toString()); salva() }
+    /** identificativo di questo PC (per riconoscere il proprio indice portatile) */
+    val dispositivo: String
+        get() = p.getProperty("dispositivo") ?: java.util.UUID.randomUUID().toString().also { p.setProperty("dispositivo", it); salva() }
+    /** salva l'indice portatile nella radice della cartella: di norma sì per dischi esterni/altre unità, no per il disco di sistema */
+    fun portatile(c: String): Boolean = p.getProperty("portatile|$c")?.toBoolean() ?: !sulDiscoDiSistema(c)
+    fun setPortatile(c: String, v: Boolean) { p.setProperty("portatile|$c", v.toString()); salva() }
+    fun firmaPortatile(c: String): String? = p.getProperty("firma|$c")
+    fun setFirmaPortatile(c: String, v: String) { p.setProperty("firma|$c", v); salva() }
+    private fun sulDiscoDiSistema(c: String): Boolean {
+        val sys = (System.getenv("SystemDrive") ?: return false).trimEnd('\\', '/').lowercase()
+        return c.lowercase().startsWith(sys)
+    }
     var soglia: Float
         get() = p.getProperty("soglia", "0.5").toFloatOrNull() ?: 0.5f
         set(v) { p.setProperty("soglia", v.toString()); salva() }
@@ -92,6 +104,11 @@ object Indicizzatore {
         Db.rimuovi(rimosse)
         val daFare = file.filter { f -> noti[f.file.absolutePath].let { it == null || it.modificata != f.file.lastModified() || it.dimensione != f.file.length() } }
             .sortedByDescending { it.file.lastModified() }
+        // indici portatili trovati sulle cartelle (scritti dal telefono o da un altro PC): niente rianalisi
+        val pacchetti = HashMap<String, IndicePortatile.Pacchetto>()
+        val mappe = HashMap<String, Map<String, Long>>()
+        for (c in daFare.map { it.cartella }.toSet()) runCatching { Portatile.leggi(c) }.getOrNull()?.let { pk -> pacchetti[c] = pk; mappe[c] = Portatile.mappaPersone(pk) }
+        val dalIndice = AtomicInteger(0)
         val fatte = AtomicInteger(0)
         stato.value = Avanzamento(true, "analisi", 0, daFare.size)
         withContext(pool) {
@@ -100,7 +117,10 @@ object Indicizzatore {
                 blocco.map { ff ->
                     async {
                         val f = ff.file
-                        runCatching {
+                        val pk = pacchetti[ff.cartella]
+                        val x = pk?.let { k -> Portatile.relativo(java.io.File(ff.cartella), f.absolutePath)?.let { rel -> k.foto(rel, f.length()) } }
+                        if (x != null && runCatching { Portatile.usa(ff, x, mappe[ff.cartella] ?: emptyMap()) }.getOrDefault(false)) dalIndice.incrementAndGet()
+                        else runCatching {
                             val r = Analisi.analizza(f)
                             val data = Immagini.dataScatto(f) ?: f.lastModified()
                             val id = Db.salva(f.absolutePath, ff.cartella, f.name, f.parentFile?.name ?: "", data, f.lastModified(), f.length(),
@@ -148,6 +168,25 @@ object Indicizzatore {
                 }
             }
         }
+        ultimoDalIndice = dalIndice.get()
+        // indice sul disco aggiornato per l'altro dispositivo
+        if (kotlinx.coroutines.currentCoroutineContext().isActive) aggiornaPortatili(raggiungibili)
+    }
+
+    /** foto riprese dall'indice sul disco nell'ultimo aggiornamento */
+    @Volatile var ultimoDalIndice = 0
+
+    /** Aggiorna l'indice portatile delle cartelle raggiungibili, solo se qualcosa è cambiato */
+    fun aggiornaPortatili(raggiungibili: Collection<String>, forza: Boolean = false): Int {
+        var n = 0
+        for (c in raggiungibili) {
+            if (!forza && !Impostazioni.portatile(c)) continue
+            val firma = Portatile.firma(c)
+            if (!forza && firma == Impostazioni.firmaPortatile(c) && Portatile.file(java.io.File(c)).isFile) continue
+            stato.value = Avanzamento(true, "portatile", 0, 0, java.io.File(c).name)
+            runCatching { Portatile.scrivi(c); Impostazioni.setFirmaPortatile(c, firma); n++ }
+        }
+        return n
     }
 
     /** Estrae i fotogrammi chiave di un video, li analizza come foto e scarta quelli quasi uguali al precedente */
