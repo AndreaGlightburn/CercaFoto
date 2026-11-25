@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -149,6 +150,13 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
             }
         }
         BannerUnita(vm)
+        val nVideo by vm.nVideo.collectAsStateWithLifecycle()
+        val tipo by vm.tipo.collectAsStateWithLifecycle()
+        if (nVideo > 0) Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(tipo == null, { vm.tipo.value = null }, label = { Text("Tutto") })
+            FilterChip(tipo == "foto", { vm.tipo.value = "foto" }, label = { Text("Foto") })
+            FilterChip(tipo == "video", { vm.tipo.value = "video" }, label = { Text("Video ($nVideo)") })
+        }
         if (av.attivo && av.totale > 0) {
             LinearProgressIndicator(
                 progress = { av.fatte / av.totale.toFloat() },
@@ -167,7 +175,7 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
             }
         } else {
             Text(
-                (if (q.isBlank() && filtri.attivi == 0) "${ris.size} foto indicizzate" else "${ris.size} foto trovate") +
+                (if (q.isBlank() && filtri.attivi == 0) "${ris.size} elementi indicizzati" else "${ris.size} trovati") +
                     if (selezione.isEmpty() && ris.isNotEmpty()) " · tieni premuto per selezionare" else "",
                 style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(12.dp, 6.dp)
             )
@@ -210,11 +218,14 @@ fun BannerUnita(vm: AppVM, inIndice: Boolean = false) {
     }
 }
 
-fun condividi(ctx: Context, lista: List<FotoIdx>) {
-    if (lista.isEmpty()) return
-    val i = if (lista.size == 1) Intent(Intent.ACTION_SEND).setType("image/*").putExtra(Intent.EXTRA_STREAM, lista[0].uri)
-    else Intent(Intent.ACTION_SEND_MULTIPLE).setType("image/*")
-        .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(lista.map { it.uri }))
+fun condividi(ctx: Context, lista0: List<FotoIdx>) {
+    if (lista0.isEmpty()) return
+    // per i video si condivide il filmato, non il fotogramma
+    val uri = lista0.map { it.video ?: it.uri }.distinct()
+    val tipo = if (lista0.any { it.isVideo }) (if (lista0.all { it.isVideo }) "video/*" else "*/*") else "image/*"
+    val i = if (uri.size == 1) Intent(Intent.ACTION_SEND).setType(tipo).putExtra(Intent.EXTRA_STREAM, uri[0])
+    else Intent(Intent.ACTION_SEND_MULTIPLE).setType(tipo)
+        .putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uri))
     i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     ctx.startActivity(Intent.createChooser(i, "Condividi"))
 }
@@ -291,6 +302,12 @@ fun GrigliaFoto(
                 )
                 if (sel) Icon(Icons.Default.CheckCircle, "Selezionata", Modifier.align(Alignment.TopStart).padding(4.dp),
                     tint = MaterialTheme.colorScheme.primary)
+                if (f.isVideo) Text(
+                    "▶ " + tempoVideo(f.tempo) + if (f.momenti.size > 1) " ·${f.momenti.size}" else "",
+                    color = Color.White, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(3.dp)
+                        .background(Color(0xB0000000), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 1.dp)
+                )
             }
         }
     }
@@ -299,8 +316,16 @@ fun GrigliaFoto(
 // ---------------------------------------------------------------- COPIA / SPOSTA / ELIMINA
 
 @Composable
-fun DialogoAzione(vm: AppVM, tipo: TipoOp, lista: List<FotoIdx>, chiudi: () -> Unit, fatto: () -> Unit) {
-    val n = if (lista.size == 1) "questa foto" else "${lista.size} foto"
+fun DialogoAzione(vm: AppVM, tipo: TipoOp, tutte: List<FotoIdx>, chiudi: () -> Unit, fatto: () -> Unit) {
+    // copia, sposta ed elimina valgono per le foto; i video si gestiscono dalla Galleria
+    val lista = tutte.filter { !it.isVideo }
+    if (lista.isEmpty()) {
+        AlertDialog(onDismissRequest = chiudi, title = { Text("Video") },
+            text = { Text("Copia, sposta ed elimina funzionano sulle foto. Per i video usa la Galleria o l'app File.") },
+            confirmButton = { TextButton(chiudi) { Text("OK") } })
+        return
+    }
+    val n = (if (lista.size == 1) "questa foto" else "${lista.size} foto") + if (lista.size < tutte.size) " (i video selezionati restano dove sono)" else ""
     if (tipo == TipoOp.ELIMINA || tipo == TipoOp.CESTINO) {
         val esterne = lista.count { it.cartella != null }
         AlertDialog(
@@ -403,6 +428,7 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
     var reg by remember { mutableStateOf(Regolazioni()) }
     val basi = remember { HashMap<Long, ImageBitmap>() }
     var messaggio by remember { mutableStateOf<String?>(null) }
+    var lettore by remember { mutableStateOf<Long?>(null) }
     val scope = rememberCoroutineScope()
     LaunchedEffect(stato.settledPage) {
         val id = lista.getOrNull(stato.settledPage)?.id
@@ -441,14 +467,20 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
                 Icon(Icons.Default.Edit, "Luce e colore", tint = if (regola || !reg.neutra) Color(0xFFFFD54F) else Color.White)
             }
             IconButton({ info = !info; if (info) regola = false }) { Icon(Icons.Default.Info, "Dettagli", tint = Color.White) }
+            if (f.isVideo) IconButton({ lettore = f.tempo }) { Icon(Icons.Default.PlayArrow, "Riproduci da qui", tint = Color.White) }
             IconButton({ condividi(ctx, listOf(f)) }) { Icon(Icons.Default.Share, "Condividi", tint = Color.White) }
             var menu by remember { mutableStateOf(false) }
             Box {
                 IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "Altro", tint = Color.White) }
                 DropdownMenu(menu, { menu = false }) {
-                    DropdownMenuItem({ Text("Copia in…") }, { menu = false; azione = TipoOp.COPIA })
-                    DropdownMenuItem({ Text("Sposta in…") }, { menu = false; azione = TipoOp.SPOSTA })
-                    DropdownMenuItem({ Text("Elimina…") }, { menu = false; azione = TipoOp.ELIMINA })
+                    if (f.isVideo) DropdownMenuItem({ Text("Apri il video in un'altra app") }, {
+                        menu = false
+                        runCatching { ctx.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(f.video, "video/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
+                    }) else {
+                        DropdownMenuItem({ Text("Copia in…") }, { menu = false; azione = TipoOp.COPIA })
+                        DropdownMenuItem({ Text("Sposta in…") }, { menu = false; azione = TipoOp.SPOSTA })
+                        DropdownMenuItem({ Text("Elimina…") }, { menu = false; azione = TipoOp.ELIMINA })
+                    }
                     DropdownMenuItem({ Text("Modifica etichette") }, { menu = false; modifica = true })
                     DropdownMenuItem({ Text("Aggiungi a una persona…") }, { menu = false; aggiungiPersona = true })
                     DropdownMenuItem({ Text("Altre foto di questa cartella") }, {
@@ -493,6 +525,25 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
                     .navigationBarsPadding().padding(16.dp).heightIn(max = 380.dp).verticalScroll(rememberScrollState())
             ) {
                 Text(formatoData.format(Date(f.data)), color = Color.White, fontWeight = FontWeight.Bold)
+                if (f.isVideo) {
+                    Text("Video «${f.nome}» · momento ${tempoVideo(f.tempo)} di ${tempoVideo(f.durata)}", color = Color.White)
+                    Button({ lettore = f.tempo }, Modifier.padding(vertical = 4.dp)) { Text("▶ Riproduci da ${tempoVideo(f.tempo)}") }
+                    val trovati = f0.momenti.toSet()
+                    val momenti = remember(tutte, f.video) { tutte.filter { it.video == f.video }.sortedBy { it.tempo } }
+                    Text("Momenti del video (tocca per riprodurre da lì" + (if (trovati.size > 1) "; in giallo quelli trovati" else "") + "):",
+                        color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                        items(momenti, key = { it.id }) { m ->
+                            val evid = m.id in trovati || m.id == f.id
+                            Column(Modifier.width(76.dp).clickable { lettore = m.tempo }, horizontalAlignment = Alignment.CenterHorizontally) {
+                                AsyncImage(ImageRequest.Builder(ctx).data(m.uri).size(200).build(), null, contentScale = ContentScale.Crop,
+                                    modifier = Modifier.size(72.dp, 54.dp).clip(RoundedCornerShape(4.dp))
+                                        .then(if (evid) Modifier.background(Color(0xFFFFB300)).padding(2.dp) else Modifier))
+                                Text(tempoVideo(m.tempo), color = if (evid) Color(0xFFFFD54F) else Color.LightGray, style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+                }
                 if (dettagli.isEmpty()) Text("${f.album} · ${f.nome}", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                 for ((k, v) in dettagli) Text("$k: $v", color = Color.LightGray, style = MaterialTheme.typography.bodySmall)
                 val nomi = persone.filter { it.id in f.persone }.map { it.nome ?: "persona senza nome" }
@@ -527,9 +578,10 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
                         style = MaterialTheme.typography.bodySmall)
                 Row {
                     TextButton({
-                        val i = Intent(Intent.ACTION_VIEW).setDataAndType(f.uri, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        val i = if (f.isVideo) Intent(Intent.ACTION_VIEW).setDataAndType(f.video, "video/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        else Intent(Intent.ACTION_VIEW).setDataAndType(f.uri, "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         runCatching { ctx.startActivity(i) }
-                    }) { Text(if (f.cartella != null) "Apri con…" else "Apri in Galleria") }
+                    }) { Text(if (f.isVideo) "Apri video" else if (f.cartella != null) "Apri con…" else "Apri in Galleria") }
                     TextButton({ modifica = true }) { Text("Etichette") }
                     dettagli.firstOrNull { it.first == "Posizione" }?.let { (_, pos) ->
                         TextButton({
@@ -539,6 +591,9 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
                 }
             }
         }
+    }
+    lettore?.let { ms ->
+        lista.getOrNull(stato.currentPage)?.video?.let { v -> LettoreVideo(v, ms) { lettore = null } }
     }
     if (aggiungiPersona) lista.getOrNull(stato.currentPage)?.let { x ->
         DialogoAggiungiPersona(vm, listOf(x), { aggiungiPersona = false }) {}
@@ -554,6 +609,31 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
     if (modifica) {
         val f = lista.getOrNull(stato.currentPage)?.let { x -> tutte.firstOrNull { it.id == x.id } ?: x }
         if (f != null) DialogoEtichette(f, { modifica = false }) { man, rim -> vm.salvaEtichette(f.id, man, rim) }
+    }
+}
+
+/** Lettore video interno: parte dal punto indicato */
+@Composable
+fun LettoreVideo(uri: Uri, ms: Long, chiudi: () -> Unit) {
+    androidx.compose.ui.window.Dialog(chiudi, androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            androidx.compose.ui.viewinterop.AndroidView(
+                factory = { c ->
+                    android.widget.VideoView(c).apply {
+                        val mc = android.widget.MediaController(c)
+                        mc.setAnchorView(this); setMediaController(mc)
+                        setOnPreparedListener { mp -> mp.seekTo(ms, android.media.MediaPlayer.SEEK_CLOSEST); mp.start(); mc.show(3000) }
+                        setOnErrorListener { _, _, _ -> android.widget.Toast.makeText(c, "Impossibile riprodurre questo video qui: usa «Apri video»", android.widget.Toast.LENGTH_LONG).show(); true }
+                        setVideoURI(uri)
+                    }
+                },
+                onRelease = { it.stopPlayback() },
+                modifier = Modifier.align(Alignment.Center).fillMaxWidth(),
+            )
+            IconButton(chiudi, Modifier.align(Alignment.TopStart).statusBarsPadding().padding(4.dp)) {
+                Icon(Icons.Default.Close, "Chiudi", tint = Color.White)
+            }
+        }
     }
 }
 
@@ -702,7 +782,7 @@ private object CacheVolti { val lru = LruCache<Long, ImageBitmap>(300) }
 private fun caricaVolto(ctx: Context, uri: Uri, pl: Float, pt: Float, pr: Float, pb: Float): ImageBitmap? {
     val bw = max(pr - pl, 0.02f)
     val lato = (240f / bw).toInt().coerceIn(240, 2048)
-    val bmp = ctx.contentResolver.loadThumbnail(uri, Size(lato, lato), null)
+    val bmp = caricaBitmap(ctx, uri, lato)
     val w = bmp.width; val h = bmp.height
     val mx = (pr - pl) * 0.2f; val my = (pb - pt) * 0.2f
     val l = (max(0f, pl - mx) * w).toInt(); val t = (max(0f, pt - my) * h).toInt()
@@ -942,11 +1022,12 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
     val foto by vm.foto.collectAsStateWithLifecycle()
     val p = persone.firstOrNull { it.id == id }
     if (p == null) { LaunchedEffect(Unit) { indietro() }; return }
-    val sue = remember(foto, id) { foto.filter { id in it.persone } }
+    val sue = remember(foto, id) { vm.comprimiVideo(foto.filter { id in it.persone }) }
     var dialogoNome by remember { mutableStateOf(false) }
     var dialogoUnisci by remember { mutableStateOf(false) }
     var unisciIn by remember { mutableStateOf<Persona?>(null) }
     var sel by remember(id) { mutableStateOf(setOf<Long>()) }
+    fun tutteSel() = vm.espandi(sel, sue)
     var confermaTogli by remember { mutableStateOf(false) }
     var spostaIn by remember { mutableStateOf(false) }
     if (sel.isNotEmpty()) androidx.activity.compose.BackHandler { sel = emptySet() }
@@ -1044,14 +1125,14 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
             onDismissRequest = { confermaTogli = false },
             title = { Text("Non è ${p.nome ?: "questa persona"}?") },
             text = { Text("Tolgo $n dal gruppo. Se sai chi è, usa invece «Sposta in…».") },
-            confirmButton = { TextButton({ vm.escludiFoto(sel.toList(), p.id); sel = emptySet(); confermaTogli = false }) { Text("Togli") } },
+            confirmButton = { TextButton({ vm.escludiFoto(tutteSel(), p.id); sel = emptySet(); confermaTogli = false }) { Text("Togli") } },
             dismissButton = { TextButton({ confermaTogli = false }) { Text("Annulla") } },
         )
     }
     if (spostaIn) {
         var simili by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
         var nuovoNome by remember { mutableStateOf<String?>(null) }
-        LaunchedEffect(sel) { simili = vm.somiglianzeFoto(sel.toList(), p.id) }
+        LaunchedEffect(sel) { simili = vm.somiglianzeFoto(tutteSel(), p.id) }
         val n = if (sel.size == 1) "questa foto" else "${sel.size} foto"
         if (nuovoNome != null) AlertDialog(
             onDismissRequest = { spostaIn = false },
@@ -1059,13 +1140,13 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
             text = { OutlinedTextField(nuovoNome!!, { nuovoNome = it }, singleLine = true, placeholder = { Text("Nome") }) },
             confirmButton = {
                 TextButton({
-                    if (nuovoNome!!.isNotBlank()) { vm.nuovaPersonaDaFoto(sel.toList(), p.id, nuovoNome!!); sel = emptySet(); spostaIn = false }
+                    if (nuovoNome!!.isNotBlank()) { vm.nuovaPersonaDaFoto(tutteSel(), p.id, nuovoNome!!); sel = emptySet(); spostaIn = false }
                 }) { Text("Crea e sposta") }
             },
             dismissButton = { TextButton({ spostaIn = false }) { Text("Annulla") } },
         ) else DialogoScegliPersona("Sposta $n in…", persone, p.id, simili, { spostaIn = false },
             extra = { TextButton({ nuovoNome = "" }) { Text("+ Nuova persona") } }) { o ->
-            vm.spostaFoto(sel.toList(), p.id, o); sel = emptySet(); spostaIn = false
+            vm.spostaFoto(tutteSel(), p.id, o); sel = emptySet(); spostaIn = false
         }
     }
 }
@@ -1078,7 +1159,7 @@ fun SchermataPersona(vm: AppVM, id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit
 fun DialogoUnioneSelettiva(
     vm: AppVM, foto: List<FotoIdx>, sorgente: Persona, destinazione: Persona, titolo: String, nota: String? = null, chiudi: () -> Unit,
 ) {
-    val sue = remember(foto, sorgente.id) { foto.filter { sorgente.id in it.persone } }
+    val sue = remember(foto, sorgente.id) { vm.comprimiVideo(foto.filter { sorgente.id in it.persone }) }
     var scelte by remember(sorgente.id) { mutableStateOf(sue.map { it.id }.toSet()) }
     val tutte = scelte.size == sue.size
     AlertDialog(
@@ -1102,7 +1183,7 @@ fun DialogoUnioneSelettiva(
         },
         confirmButton = {
             TextButton({
-                if (tutte) vm.unisci(destinazione.id, sorgente.id) else vm.spostaFoto(scelte.toList(), sorgente.id, destinazione)
+                if (tutte) vm.unisci(destinazione.id, sorgente.id) else vm.spostaFoto(vm.espandi(scelte, sue), sorgente.id, destinazione)
                 chiudi()
             }, enabled = scelte.isNotEmpty()) { Text(if (tutte) "Unisci tutto" else "Unisci ${scelte.size} foto") }
         },
@@ -1111,6 +1192,49 @@ fun DialogoUnioneSelettiva(
 }
 
 // ---------------------------------------------------------------- INDICE
+
+@Composable
+fun CardVideo(vm: AppVM) {
+    val ctx = LocalContext.current
+    var video by remember { mutableStateOf(Impostazioni.video(ctx)) }
+    var sempre by remember { mutableStateOf(Impostazioni.videoSempre(ctx)) }
+    var permesso by remember { mutableStateOf(haPermessoVideo(ctx)) }
+    val attesa by vm.videoInAttesa.collectAsStateWithLifecycle()
+    val richiesta = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        permesso = haPermessoVideo(ctx); if (permesso) Indicizzatore.avvia(ctx, sostituisci = true)
+    }
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Analizza anche i video", fontWeight = FontWeight.Bold)
+                    Text("Un fotogramma ogni pochi secondi, analizzato come una foto: trovi persone, oggetti e scene col minuto esatto.",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(video, { video = it; Impostazioni.setVideo(ctx, it); if (it) Indicizzatore.avvia(ctx, sostituisci = true) })
+            }
+            if (video) {
+                if (!permesso) {
+                    Text("Serve il permesso di accesso ai video.", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 6.dp))
+                    Button({
+                        richiesta.launch(if (android.os.Build.VERSION.SDK_INT >= 34) arrayOf(android.Manifest.permission.READ_MEDIA_VIDEO, android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
+                            else arrayOf(android.Manifest.permission.READ_MEDIA_VIDEO))
+                    }) { Text("Consenti l'accesso ai video") }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 6.dp)) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Anche senza caricatore")
+                        Text("Di norma i video vengono analizzati solo mentre il telefono è in carica, per non consumare la batteria.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                    Switch(sempre, { sempre = it; Impostazioni.setVideoSempre(ctx, it); if (it) Indicizzatore.avvia(ctx, sostituisci = true) })
+                }
+                if (attesa > 0 && !sempre) Text("$attesa video in attesa: verranno analizzati da soli quando metti il telefono in carica.",
+                    color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
+            }
+        }
+    }
+}
 
 @Composable
 fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
@@ -1135,7 +1259,9 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
+                val nVideo by vm.nVideo.collectAsStateWithLifecycle()
                 Text("Foto analizzate: $nFoto")
+                if (nVideo > 0) Text("Video analizzati: $nVideo")
                 Text("Volti trovati: $nVolti")
                 Text("Persone riconosciute: $nPersone")
                 Spacer(Modifier.height(8.dp))
@@ -1147,6 +1273,10 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
                     }
                     av.attivo && av.fase == "completamento" && av.totale > 0 -> {
                         Text("Aggiorno le foto già analizzate (colori, età, capelli, abiti): ${av.fatte} di ${av.totale}")
+                        LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
+                    }
+                    av.attivo && av.fase == "video" && av.totale > 0 -> {
+                        Text("Analisi video ${av.fatte + 1} di ${av.totale}")
                         LinearProgressIndicator(progress = { av.fatte / av.totale.toFloat() }, modifier = Modifier.fillMaxWidth())
                     }
                     av.attivo && av.totale > 0 -> {
@@ -1165,6 +1295,8 @@ fun SchermataIndice(vm: AppVM, chiediPermessi: () -> Unit) {
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
             }
         }
+
+        CardVideo(vm)
 
         if (accessoParziale(ctx)) {
             Card(Modifier.fillMaxWidth()) {

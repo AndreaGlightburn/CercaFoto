@@ -1,5 +1,7 @@
 package eu.iz2oii.cercafoto
 
+import android.net.Uri
+
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -37,11 +39,43 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     val caricato = MutableStateFlow(false)
 
     val filtri = MutableStateFlow(Filtri())
+    /** null = foto e video, "foto", "video" */
+    val tipo = MutableStateFlow<String?>(null)
+    val nVideo = MutableStateFlow(0)
+    val videoInAttesa = MutableStateFlow(0)
+
+    private val PAROLE_VIDEO = setOf("video", "filmato", "filmati", "filmino", "filmini")
 
     val risultati: StateFlow<List<FotoIdx>> =
-        combine(query.debounce(250), foto, persone, filtri) { q, f, p, fi -> fi.applica(Ricerca.cerca(q, f, p)) }
+        combine(query.debounce(250), foto, persone, filtri, tipo) { q, f, p, fi, t ->
+            var qn = " " + Testo.normalizza(q) + " "
+            var tp = t
+            for (w in PAROLE_VIDEO) if (qn.contains(" $w ")) { tp = "video"; qn = qn.replace(" $w ", " ") }
+            comprimiVideo(fi.applica(Ricerca.cerca(if (tp != t) qn.trim() else q, f, p)).filter { tp == null || (tp == "video") == it.isVideo })
+        }
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+
+    /** Ogni video compare una volta sola: la prima voce rappresenta tutti i suoi fotogrammi presenti nella lista */
+    fun comprimiVideo(l: List<FotoIdx>): List<FotoIdx> {
+        val gruppi = LinkedHashMap<Uri, MutableList<FotoIdx>>()
+        val pos = HashMap<Uri, Int>()
+        val out = ArrayList<FotoIdx>(l.size)
+        for (f in l) {
+            val v = f.video
+            if (v == null) { out += f; continue }
+            val g = gruppi[v]
+            if (g == null) { gruppi[v] = mutableListOf(f); pos[v] = out.size; out += f } else g += f
+        }
+        for ((v, g) in gruppi) out[pos[v]!!] = g[0].copy(momenti = g.sortedBy { it.tempo }.map { it.id })
+        return out
+    }
+
+    /** Dagli id delle voci (anche raggruppate) a tutti gli id dei fotogrammi/foto che rappresentano */
+    fun espandi(ids: Collection<Long>, lista: List<FotoIdx>): List<Long> {
+        val per = lista.associateBy { it.id }
+        return ids.flatMap { per[it]?.momenti?.takeIf { m -> m.isNotEmpty() } ?: listOf(it) }.distinct()
+    }
 
     private var ultimoRicarico = 0
 
@@ -65,12 +99,26 @@ class AppVM(app: Application) : AndroidViewModel(app) {
                 if (!attivo) ultimoRicarico = 0
             }
         }
+        // lavoro dei video "in carica": mostra l'avanzamento solo mentre gira davvero
+        viewModelScope.launch {
+            var giraVa = false
+            WorkManager.getInstance(app).getWorkInfosForUniqueWorkFlow(Indicizzatore.NOME_VIDEO).collect { lista ->
+                val w = lista.firstOrNull()
+                val gira = w?.state == WorkInfo.State.RUNNING
+                if (gira) avanzamento.value = Avanzamento(true, w!!.progress.getString("fase") ?: "video", w.progress.getInt("fatte", 0), w.progress.getInt("totale", 0))
+                else if (giraVa) { avanzamento.value = Avanzamento(false, "", 0, 0); ricarica() }
+                giraVa = gira
+                videoInAttesa.value = Impostazioni.videoInAttesa(app)
+            }
+        }
     }
 
     fun ricarica() {
         viewModelScope.launch {
             val (f, p, c) = withContext(Dispatchers.IO) { Triple(db.caricaFoto(), db.caricaPersone(), db.conteggi()) }
             foto.value = f; persone.value = p; conteggi.value = c; caricato.value = true
+            nVideo.value = withContext(Dispatchers.IO) { db.contaVideo() }
+            videoInAttesa.value = Impostazioni.videoInAttesa(getApplication())
         }
     }
 

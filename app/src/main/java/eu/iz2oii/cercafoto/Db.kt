@@ -36,8 +36,20 @@ data class FotoIdx(
     val cartella: String? = null,   // null = galleria di Android, altrimenti URI della cartella esterna
     val manuali: List<String> = emptyList(),   // etichette aggiunte a mano (testo libero)
     val rimosse: Set<String> = emptySet(),     // etichette automatiche tolte a mano (nomi EN)
+    /** fotogrammi dei video: uri del filmato, istante (ms) e durata; uri = immagine del fotogramma salvata dall'app */
+    val video: Uri? = null,
+    val tempo: Long = 0,
+    val durata: Long = 0,
+    /** nei risultati raggruppati: tutti i fotogrammi dello stesso video rappresentati da questa voce */
+    val momenti: List<Long> = emptyList(),
 ) {
     val testoManuali: String = Testo.normalizza(manuali.joinToString(" "))
+    val isVideo get() = video != null
+}
+
+fun tempoVideo(ms: Long): String {
+    val s = ms / 1000
+    return if (s >= 3600) "%d:%02d:%02d".format(s / 3600, s / 60 % 60, s % 60) else "%d:%02d".format(s / 60, s % 60)
 }
 
 data class Persona(
@@ -67,7 +79,10 @@ fun ByteArray.toFloats(): FloatArray {
     return FloatArray(size / 4) { bb.getFloat() }
 }
 
-class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 6) {
+class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", null, 7) {
+    /** immagini dei fotogrammi dei video (nella memoria privata dell'app) */
+    val cartellaFotogrammi = java.io.File(ctx.filesDir, "fotogrammi").apply { mkdirs() }
+    fun fileFotogramma(id: Long) = java.io.File(cartellaFotogrammi, "${-id}.jpg")
 
     companion object {
         @Volatile private var inst: Db? = null
@@ -98,7 +113,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         db.execSQL("CREATE INDEX volto_foto ON volto(foto_id)")
         db.execSQL("CREATE INDEX volto_persona ON volto(persona_id)")
         db.execSQL("CREATE TABLE persona(id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT, copertina INTEGER, foto INTEGER DEFAULT 0, nascosta INTEGER DEFAULT 0)")
-        onUpgrade(db, 1, 6)
+        onUpgrade(db, 1, 7)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, o: Int, n: Int) {
@@ -124,6 +139,13 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             db.execSQL("CREATE TABLE IF NOT EXISTS riferimento(persona_id INTEGER, emb BLOB)")
             db.execSQL("CREATE INDEX IF NOT EXISTS riferimento_persona ON riferimento(persona_id)")
         }
+        if (o < 7) {
+            // video: ogni fotogramma chiave è una riga di foto con video_id e tempo
+            runCatching { db.execSQL("ALTER TABLE foto ADD COLUMN video_id INTEGER DEFAULT 0") }
+            runCatching { db.execSQL("ALTER TABLE foto ADD COLUMN tempo INTEGER DEFAULT 0") }
+            db.execSQL("CREATE TABLE IF NOT EXISTS video(id INTEGER PRIMARY KEY, uri TEXT, nome TEXT, album TEXT, data INTEGER, modificata INTEGER, durata INTEGER, cartella TEXT, volume TEXT, fotogrammi INTEGER DEFAULT 0)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS foto_video ON foto(video_id)")
+        }
         if (o < 4) {
             // scambio con l'app Windows: identificativo stabile delle persone e impronta dei file
             db.execSQL("ALTER TABLE persona ADD COLUMN uid TEXT")
@@ -134,7 +156,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
     /** Foto analizzate con una versione precedente: mancano colori e attributi dei volti */
     fun daCompletare(): List<Pair<Long, Uri>> {
         val out = ArrayList<Pair<Long, Uri>>()
-        readableDatabase.rawQuery("SELECT id, uri FROM foto WHERE versione < $VERSIONE ORDER BY data DESC", null).use { c ->
+        readableDatabase.rawQuery("SELECT id, uri FROM foto WHERE versione < $VERSIONE AND video_id = 0 ORDER BY data DESC", null).use { c ->
             while (c.moveToNext()) out += c.getLong(0) to uriDi(c.getLong(0), c.getString(1))
         }
         return out
@@ -195,7 +217,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
     /** id -> data modifica, per sapere cosa è già indicizzato */
     fun modifiche(): HashMap<Long, Long> {
         val m = HashMap<Long, Long>()
-        readableDatabase.rawQuery("SELECT id, modificata FROM foto", null).use { c ->
+        readableDatabase.rawQuery("SELECT id, modificata FROM foto WHERE video_id = 0", null).use { c ->
             while (c.moveToNext()) m[c.getLong(0)] = c.getLong(1)
         }
         return m
@@ -209,10 +231,52 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             for (id in ids) {
                 db.delete("volto", "foto_id=?", arrayOf(id.toString()))
                 db.delete("foto", "id=?", arrayOf(id.toString()))
+                if (id < 0) fileFotogramma(id).delete()
             }
+            ricontaInterno(db)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
+
+    // ------------------------------------------------------------ video
+
+    class StatoVideo(val id: Long, val modificata: Long, val cartella: String?, val volume: String?)
+
+    fun statiVideo(): HashMap<Long, StatoVideo> {
+        val m = HashMap<Long, StatoVideo>()
+        readableDatabase.rawQuery("SELECT id, modificata, cartella, volume FROM video", null).use { c ->
+            while (c.moveToNext()) m[c.getLong(0)] = StatoVideo(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3))
+        }
+        return m
+    }
+
+    fun fotogrammiVideo(videoId: Long): List<Long> {
+        val l = ArrayList<Long>()
+        readableDatabase.rawQuery("SELECT id FROM foto WHERE video_id = ?", arrayOf(videoId.toString())).use { c -> while (c.moveToNext()) l += c.getLong(0) }
+        return l
+    }
+
+    fun rimuoviVideo(ids: Collection<Long>) {
+        for (v in ids) { rimuovi(fotogrammiVideo(v)); writableDatabase.delete("video", "id=?", arrayOf(v.toString())) }
+    }
+
+    /** Crea o aggiorna il video togliendo i fotogrammi precedenti */
+    fun salvaVideo(m: MediaFoto, durata: Long) {
+        rimuovi(fotogrammiVideo(m.id))
+        writableDatabase.insertWithOnConflict("video", null, ContentValues().apply {
+            put("id", m.id); put("uri", m.uriEffettivoVideo.toString()); put("nome", m.nome); put("album", m.album)
+            put("data", m.data); put("modificata", m.modificata); put("durata", durata)
+            put("cartella", m.cartella); put("volume", m.volume); put("fotogrammi", 0)
+        }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
+    fun segnaFotogramma(fotoId: Long, videoId: Long, tempo: Long) =
+        writableDatabase.update("foto", ContentValues().apply { put("video_id", videoId); put("tempo", tempo) }, "id=?", arrayOf(fotoId.toString()))
+
+    fun chiudiVideo(videoId: Long, n: Int) =
+        writableDatabase.update("video", ContentValues().apply { put("fotogrammi", n) }, "id=?", arrayOf(videoId.toString()))
+
+    fun contaVideo(): Int = readableDatabase.rawQuery("SELECT COUNT(*) FROM video", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
 
     fun salva(m: MediaFoto, r: Analizzatore.Risultato?) {
         val db = writableDatabase
@@ -267,7 +331,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
             }
         }
         val out = ArrayList<FotoIdx>()
-        db.rawQuery("SELECT id, data, nome, album, etichette, volti, sorriso, testo, colori, uri, cartella, manuali, rimosse FROM foto ORDER BY data DESC", null).use { c ->
+        db.rawQuery("SELECT f.id, f.data, f.nome, f.album, f.etichette, f.volti, f.sorriso, f.testo, f.colori, f.uri, f.cartella, f.manuali, f.rimosse, v.uri, f.tempo, v.durata " +
+            "FROM foto f LEFT JOIN video v ON v.id = f.video_id AND f.video_id <> 0 ORDER BY f.data DESC", null).use { c ->
             while (c.moveToNext()) {
                 val rimosse = c.getString(12)?.split(';')?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
                 val et = decodifica(c.getString(4)).filterKeys { it !in rimosse }
@@ -283,6 +348,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
                     cartella = c.getString(10),
                     manuali = c.getString(11)?.split(';')?.filter { it.isNotBlank() } ?: emptyList(),
                     rimosse = rimosse,
+                    video = c.getString(13)?.let { Uri.parse(it) }, tempo = c.getLong(14), durata = c.getLong(15),
                 )
             }
         }
@@ -308,7 +374,7 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
         val db = readableDatabase
         fun n(q: String) = db.rawQuery(q, null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
         return Triple(
-            n("SELECT COUNT(*) FROM foto"),
+            n("SELECT COUNT(*) FROM foto WHERE video_id = 0"),
             n("SELECT COUNT(*) FROM volto"),
             n("SELECT COUNT(*) FROM persona WHERE foto >= 2 OR (nome IS NOT NULL AND nome <> '')")
         )
@@ -548,7 +614,8 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
     }
 
     fun ricontaInterno(db: SQLiteDatabase) {
-        db.execSQL("UPDATE persona SET foto = (SELECT COUNT(DISTINCT foto_id) FROM volto WHERE persona_id = persona.id)")
+        // un video conta una volta sola, anche se la persona compare in molti suoi fotogrammi
+        db.execSQL("UPDATE persona SET foto = (SELECT COUNT(DISTINCT CASE WHEN f.video_id <> 0 THEN 'v' || f.video_id ELSE f.id END) FROM volto vv JOIN foto f ON f.id = vv.foto_id WHERE vv.persona_id = persona.id)")
         db.execSQL("UPDATE persona SET copertina = (SELECT id FROM volto WHERE persona_id = persona.id ORDER BY manuale, area DESC LIMIT 1) WHERE copertina IS NULL OR copertina NOT IN (SELECT id FROM volto WHERE persona_id = persona.id)")
         // i gruppi senza nome rimasti vuoti spariscono; le persone con nome restano (servono per lo scambio con Windows)
         db.execSQL("DELETE FROM persona WHERE foto = 0 AND (nome IS NULL OR nome = '')")
@@ -589,5 +656,6 @@ class Db private constructor(ctx: Context) : SQLiteOpenHelper(ctx, "indice.db", 
     fun azzera() {
         val db = writableDatabase
         db.execSQL("DELETE FROM volto"); db.execSQL("DELETE FROM foto"); db.execSQL("DELETE FROM persona"); db.execSQL("DELETE FROM riferimento")
+        db.execSQL("DELETE FROM video"); cartellaFotogrammi.listFiles()?.forEach { it.delete() }
     }
 }
