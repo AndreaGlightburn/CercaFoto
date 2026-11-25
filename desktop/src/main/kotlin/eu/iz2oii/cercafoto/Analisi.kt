@@ -42,6 +42,41 @@ object Immagini {
         return ridimensiona(orienta(rgb(img), orientamento(f)), lato)
     }
 
+    /** Dimensioni dell'originale come si vede (orientamento EXIF applicato) */
+    fun dimensioni(f: File): Pair<Int, Int>? = runCatching {
+        ImageIO.createImageInputStream(f)?.use { iis ->
+            val reader = ImageIO.getImageReaders(iis).asSequence().firstOrNull() ?: return null
+            try {
+                reader.input = iis
+                val w = reader.getWidth(0); val h = reader.getHeight(0)
+                if (orientamento(f) >= 5) h to w else w to h
+            } finally { reader.dispose() }
+        }
+    }.getOrNull()
+
+    /** Legge solo una zona dell'originale (coordinate dell'immagine orientata), sottocampionata di [passo] */
+    fun zona(f: File, l: Int, t: Int, r: Int, b: Int, passo: Int, orient: Int): BufferedImage? = runCatching {
+        ImageIO.createImageInputStream(f)?.use { iis ->
+            val reader = ImageIO.getImageReaders(iis).asSequence().firstOrNull() ?: return null
+            try {
+                reader.input = iis
+                val rw = reader.getWidth(0); val rh = reader.getHeight(0)
+                val g = rettangoloGrezzo(androidx.compose.ui.unit.IntRect(l, t, r, b), rw, rh, orient) ?: return null
+                val p = reader.defaultReadParam.apply {
+                    sourceRegion = java.awt.Rectangle(g.left, g.top, g.width, g.height)
+                    if (passo > 1) setSourceSubsampling(passo, passo, 0, 0)
+                }
+                orienta(rgb(reader.read(0, p)), orient)
+            } finally { reader.dispose() }
+        }
+    }.getOrNull()
+
+    /** Legge l'originale intero orientato (per salvare una copia modificata) */
+    fun intera(f: File): BufferedImage? = runCatching {
+        val img = ImageIO.read(f) ?: return null
+        orienta(rgb(img), orientamento(f))
+    }.getOrNull()
+
     fun orientamento(f: File): Int = runCatching {
         ImageMetadataReader.readMetadata(f).getFirstDirectoryOfType(ExifIFD0Directory::class.java)?.getInt(ExifIFD0Directory.TAG_ORIENTATION)
     }.getOrNull() ?: 1

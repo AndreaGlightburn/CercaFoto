@@ -44,6 +44,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Desktop
 import java.awt.FileDialog
@@ -230,8 +231,16 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
     var voltoScelto by remember { mutableStateOf<VoltoInfo?>(null) }
     var modifica by remember { mutableStateOf(false) }
     var aggiungi by remember { mutableStateOf(false) }
+    val zoom = remember(f.id) { ZoomStato() }
+    var lente by remember { mutableStateOf(false) }
+    var reg by remember(f.id) { mutableStateOf(Regolazioni()) }
+    var dim by remember(f.id) { mutableStateOf<Pair<Int, Int>?>(null) }
+    var orient by remember(f.id) { mutableStateOf(1) }
+    var messaggio by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
     LaunchedEffect(f.id) {
         img = withContext(Dispatchers.IO) { runCatching { Immagini.leggi(f.file, 2400)!!.toComposeImageBitmap() }.getOrNull() }
+        withContext(Dispatchers.IO) { dim = Immagini.dimensioni(f.file); orient = Immagini.orientamento(f.file) }
         dettagli = withContext(Dispatchers.IO) {
             val file = f.file
             buildList {
@@ -248,17 +257,40 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
     Row(Modifier.fillMaxSize().background(Color(0xFF111111)).focusRequester(focus).focusable().onPreviewKeyEvent { e ->
         if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
         when (e.key) {
-            Key.DirectionRight -> { if (i < lista.size - 1) i++; true }
-            Key.DirectionLeft -> { if (i > 0) i--; true }
-            Key.Escape -> { chiudi(); true }
+            Key.DirectionRight -> { if (zoom.ingrandita) zoom.applica(1f, androidx.compose.ui.geometry.Offset(-120f, 0f)) else if (i < lista.size - 1) i++; true }
+            Key.DirectionLeft -> { if (zoom.ingrandita) zoom.applica(1f, androidx.compose.ui.geometry.Offset(120f, 0f)) else if (i > 0) i--; true }
+            Key.DirectionUp -> { zoom.applica(1f, androidx.compose.ui.geometry.Offset(0f, 120f)); true }
+            Key.DirectionDown -> { zoom.applica(1f, androidx.compose.ui.geometry.Offset(0f, -120f)); true }
+            Key.PageDown -> { if (i < lista.size - 1) i++; true }
+            Key.PageUp -> { if (i > 0) i--; true }
+            Key.Plus, Key.NumPadAdd, Key.Equals -> { zoom.applica(1.4f); true }
+            Key.Minus, Key.NumPadSubtract -> { zoom.applica(1 / 1.4f); true }
+            Key.Zero, Key.NumPad0 -> { zoom.azzera(); true }
+            Key.L -> { lente = !lente; true }
+            Key.Escape -> { if (lente) lente = false else if (zoom.ingrandita) zoom.azzera() else chiudi(); true }
             else -> false
         }
     }) {
         Box(Modifier.weight(1f).fillMaxHeight()) {
-            img?.let { Image(it, null, Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) } ?: CircularProgressIndicator(Modifier.align(Alignment.Center))
+            if (img == null) CircularProgressIndicator(Modifier.align(Alignment.Center))
+            val o = orient; val file = f.file
+            VistaZoom(
+                img, dim?.first ?: 0, dim?.second ?: 0, zoom, Modifier.fillMaxSize().padding(8.dp), reg.filtro(), lente,
+                dettaglio = { r, p -> Immagini.zona(file, r.left, r.top, r.right, r.bottom, p, o)?.toComposeImageBitmap() },
+            )
             Row(Modifier.align(Alignment.TopStart).padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(chiudi) { Icon(Icons.Default.Close, "Chiudi (Esc)", tint = Color.White) }
                 Text("${i + 1} / ${lista.size}", color = Color.White)
+                Spacer(Modifier.width(12.dp))
+                FilterChip(lente, { lente = !lente }, label = { Text("Lente (L)", color = Color.White) },
+                    leadingIcon = { Icon(Icons.Default.Search, null, tint = Color.White) })
+                Spacer(Modifier.width(6.dp))
+                if (zoom.ingrandita) AssistChip({ zoom.azzera() }, label = { Text("Adatta (0)", color = Color.White) })
+                else Text("Rotellina o doppio clic per ingrandire, trascina per spostarti", color = Color(0xFFBBBBBB), style = MaterialTheme.typography.bodySmall)
+            }
+            messaggio?.let { m ->
+                LaunchedEffect(m) { if (!m.endsWith("…")) { kotlinx.coroutines.delay(6000); messaggio = null } }
+                Card(Modifier.align(Alignment.BottomCenter).padding(16.dp)) { Text(m, Modifier.padding(12.dp)) }
             }
             if (i > 0) IconButton({ i-- }, Modifier.align(Alignment.CenterStart)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Precedente", tint = Color.White) }
             if (i < lista.size - 1) IconButton({ i++ }, Modifier.align(Alignment.CenterEnd)) { Icon(Icons.AutoMirrored.Filled.ArrowForward, "Successiva", tint = Color.White) }
@@ -291,7 +323,38 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             for (a in f.attr) Text("• " + descriviVolto(a, persone), style = MaterialTheme.typography.bodySmall)
             TextButton({ aggiungi = true }) { Text("Aggiungi a una persona…") }
             if (f.colori.isNotEmpty()) Text("Colori: " + f.colori.entries.sortedByDescending { it.value }.take(4).joinToString(", ") { "${it.key} ${it.value}%" }, style = MaterialTheme.typography.bodySmall)
-            Spacer(Modifier.height(8.dp))
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+            PannelloRegolazioni(
+                reg, { reg = it },
+                auto = { reg = if (reg.auto != null) reg.copy(auto = null) else reg.copy(auto = img?.let { Regolazioni.livelliAuto(it) }) },
+                salva = {
+                    val r0 = reg; val sorgente = f.file
+                    scope.launch {
+                        messaggio = "Salvataggio in corso…"
+                        messaggio = withContext(Dispatchers.IO) {
+                            runCatching {
+                                val b = Immagini.intera(sorgente) ?: error("impossibile leggere la foto")
+                                val m = r0.matrice()
+                                val riga = IntArray(b.width * 64)
+                                var y = 0
+                                while (y < b.height) {
+                                    val n = minOf(64, b.height - y)
+                                    b.getRGB(0, y, b.width, n, riga, 0, b.width)
+                                    Regolazioni.applica(riga, m, 0, b.width * n)
+                                    b.setRGB(0, y, b.width, n, riga, 0, b.width)
+                                    y += n
+                                }
+                                var dest = File(sorgente.parentFile, sorgente.nameWithoutExtension + "_modificata.jpg")
+                                var k = 2
+                                while (dest.exists()) dest = File(sorgente.parentFile, sorgente.nameWithoutExtension + "_modificata_${k++}.jpg")
+                                dest.writeBytes(Immagini.jpeg(b, 0.95f))
+                                "Copia salvata: ${dest.absolutePath} (sarà indicizzata al prossimo aggiornamento)"
+                            }.getOrElse { "Errore nel salvataggio: ${it.message}" }
+                        }
+                    }
+                },
+            )
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
             if (f.etichette.isNotEmpty()) Text("Contiene (stima): " + f.etichette.entries.sortedByDescending { it.value }.joinToString(", ") { Dizionario.italiano(it.key) }, style = MaterialTheme.typography.bodySmall)
             Text("Le tue etichette", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 6.dp))
             Text(if (f.manuali.isEmpty()) "Nessuna" else f.manuali.joinToString(", "))

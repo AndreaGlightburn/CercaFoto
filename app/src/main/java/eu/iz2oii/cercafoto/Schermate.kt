@@ -26,6 +26,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -60,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -395,13 +397,32 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
     var volti by remember { mutableStateOf<List<VoltoInfo>>(emptyList()) }
     var voltoScelto by remember { mutableStateOf<VoltoInfo?>(null) }
     var aggiungiPersona by remember { mutableStateOf(false) }
+    val zoom = remember { HashMap<Long, ZoomStato>() }
+    var lente by remember { mutableStateOf(false) }
+    var regola by remember { mutableStateOf(false) }
+    var reg by remember { mutableStateOf(Regolazioni()) }
+    val basi = remember { HashMap<Long, ImageBitmap>() }
+    var messaggio by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(stato.settledPage) {
+        val id = lista.getOrNull(stato.settledPage)?.id
+        zoom.forEach { (k, z) -> if (k != id) z.azzera() }
+        reg = Regolazioni()
+    }
+    val idCorrente = lista.getOrNull(stato.currentPage)?.id
+    val zCorrente = idCorrente?.let { zoom.getOrPut(it) { ZoomStato() } }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        HorizontalPager(stato, Modifier.fillMaxSize(), key = { lista[it].id }) { p ->
-            AsyncImage(
-                model = ImageRequest.Builder(ctx).data(lista[p].uri).size(2048).build(),
-                contentDescription = null, contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxSize().clickable { info = !info }
-            )
+        HorizontalPager(
+            stato, Modifier.fillMaxSize(), key = { lista[it].id },
+            userScrollEnabled = zCorrente?.ingrandita != true && !lente,
+        ) { p ->
+            val fp = lista[p]
+            FotoZoom(
+                fp.uri, zoom.getOrPut(fp.id) { ZoomStato() },
+                filtro = if (fp.id == idCorrente) reg.filtro() else null,
+                lente = lente && fp.id == idCorrente,
+                caricata = { basi[fp.id] = it.base; if (basi.size > 6) basi.keys.filter { k -> k != fp.id }.take(basi.size - 6).forEach(basi::remove) },
+            ) { if (!regola) info = !info else regola = false }
         }
         val f0 = lista.getOrNull(stato.currentPage) ?: return@Box
         val f = tutte.firstOrNull { it.id == f0.id } ?: f0
@@ -412,7 +433,14 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
         Row(Modifier.fillMaxWidth().statusBarsPadding().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(chiudi) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Indietro", tint = Color.White) }
             Text("${stato.currentPage + 1} / ${lista.size}", color = Color.White, modifier = Modifier.weight(1f))
-            IconButton({ info = !info }) { Icon(Icons.Default.Info, "Dettagli", tint = Color.White) }
+            if (zCorrente?.ingrandita == true) TextButton({ zCorrente.azzera() }) { Text("Adatta", color = Color.White) }
+            IconButton({ lente = !lente }) {
+                Icon(Icons.Default.Search, "Lente", tint = if (lente) Color(0xFFFFD54F) else Color.White)
+            }
+            IconButton({ regola = !regola; if (regola) info = false }) {
+                Icon(Icons.Default.Edit, "Luce e colore", tint = if (regola || !reg.neutra) Color(0xFFFFD54F) else Color.White)
+            }
+            IconButton({ info = !info; if (info) regola = false }) { Icon(Icons.Default.Info, "Dettagli", tint = Color.White) }
             IconButton({ condividi(ctx, listOf(f)) }) { Icon(Icons.Default.Share, "Condividi", tint = Color.White) }
             var menu by remember { mutableStateOf(false) }
             Box {
@@ -428,6 +456,36 @@ fun Visore(vm: AppVM, lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -
                     })
                 }
             }
+        }
+        if (lente) Text(
+            "Lente attiva: trascina il dito sulla foto. Pizzica per ingrandire, tocca 🔍 per spegnerla.",
+            color = Color.White, style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(12.dp)
+                .background(Color(0x99000000), RoundedCornerShape(8.dp)).padding(8.dp)
+        )
+        if (regola) Surface(
+            color = Color(0xE6000000), contentColor = Color.White,
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+        ) {
+            PannelloRegolazioni(
+                reg, { reg = it },
+                auto = { reg = if (reg.auto != null) reg.copy(auto = null) else reg.copy(auto = basi[f.id]?.let { Regolazioni.livelliAuto(it) }) },
+                salva = {
+                    val r0 = reg
+                    scope.launch {
+                        messaggio = "Salvataggio in corso…"
+                        messaggio = runCatching { "Copia salvata in " + salvaCopiaModificata(ctx, f, r0) + " (sarà indicizzata al prossimo aggiornamento)" }
+                            .getOrElse { "Errore: ${it.message}" }
+                    }
+                },
+                modifier = Modifier.navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)
+                    .heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+            )
+        }
+        messaggio?.let { m ->
+            LaunchedEffect(m) { if (!m.endsWith("…")) { kotlinx.coroutines.delay(4000); messaggio = null } }
+            Text(m, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp)
+                .background(Color(0xCC000000), RoundedCornerShape(8.dp)).padding(12.dp))
         }
         if (info) {
             Column(
