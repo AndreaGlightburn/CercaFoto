@@ -492,6 +492,7 @@ fun SchermataPersona(id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit, indietro:
     var simili by remember(id, persone.size) { mutableStateOf<Map<Long, Float>>(emptyMap()) }
     LaunchedEffect(id, persone.size) { simili = withContext(Dispatchers.IO) { Stato.somiglianze(id) } }
     var daUnire by remember { mutableStateOf<Persona?>(null) }
+    var unisciIn by remember { mutableStateOf<Persona?>(null) }
     val candidati = persone.filter { it.id != id && it.nome == null && (simili[it.id] ?: 0f) >= 0.45f }.sortedByDescending { simili[it.id] }.take(14)
 
     Column(Modifier.fillMaxSize().padding(8.dp)) {
@@ -544,7 +545,7 @@ fun SchermataPersona(id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit, indietro:
                     OutlinedTextField(t, { t = it }, singleLine = true, placeholder = { Text("es. Mario") })
                     if (uguali.isNotEmpty()) {
                         Text("Esiste già? Clic per unire questo gruppo:", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
-                        for (o in uguali) RigaPersona(o, null) { Stato.unisci(o.id, id); rinomina = false }
+                        for (o in uguali) RigaPersona(o, null) { unisciIn = o; rinomina = false }
                     }
                 }
             },
@@ -552,7 +553,7 @@ fun SchermataPersona(id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit, indietro:
             dismissButton = { TextButton({ rinomina = false }) { Text("Annulla") } },
         )
     }
-    if (unisci) DialogoScegliPersona("È la stessa persona di…", persone, id, simili, { unisci = false }) { o -> Stato.unisci(id, o.id); unisci = false }
+    if (unisci) DialogoScegliPersona("È la stessa persona di…", persone, id, simili, { unisci = false }) { o -> unisciIn = o; unisci = false }
     if (sposta) {
         var s2 by remember { mutableStateOf<Map<Long, Float>>(emptyMap()) }
         LaunchedEffect(sel) { s2 = withContext(Dispatchers.IO) { Stato.somiglianzeFoto(sel.toList(), id) } }
@@ -561,20 +562,48 @@ fun SchermataPersona(id: Long, apriFoto: (List<FotoIdx>, Int) -> Unit, indietro:
     }
     if (nuova) DialogoNome("Nuova persona", "Crea e sposta", { nuova = false }) { Stato.nuovaPersonaDaFoto(sel.toList(), id, it); sel = emptySet() }
     daUnire?.let { o ->
-        val anteprima = remember(foto, o.id) { foto.filter { o.id in it.persone }.take(12) }
-        AlertDialog(
-            onDismissRequest = { daUnire = null },
-            title = { Text("È ${p.nome ?: "questa persona"}?") },
-            text = {
-                Column(Modifier.width(520.dp)) {
-                    Text("Gruppo senza nome con ${o.foto} foto, somiglianza ${((simili[o.id] ?: 0f) * 100).toInt()}%.")
-                    Box(Modifier.height(320.dp)) { GrigliaFoto(anteprima, lato = 110.dp) {} }
-                }
-            },
-            confirmButton = { TextButton({ Stato.unisci(id, o.id); daUnire = null }) { Text("Sì, unisci") } },
-            dismissButton = { TextButton({ daUnire = null }) { Text("No") } },
-        )
+        DialogoUnioneSelettiva(foto, sorgente = o, destinazione = p, titolo = "È ${p.nome ?: "questa persona"}?",
+            nota = "Gruppo senza nome, somiglianza ${((simili[o.id] ?: 0f) * 100).toInt()}%.") { daUnire = null }
     }
+    unisciIn?.let { o ->
+        DialogoUnioneSelettiva(foto, sorgente = p, destinazione = o, titolo = "Unisci a «${o.nome ?: "gruppo senza nome"}»") { unisciIn = null }
+    }
+}
+
+/** Unione con scelta delle foto: parte tutto selezionato, clic per togliere quelle che non c'entrano */
+@Composable
+fun DialogoUnioneSelettiva(foto: List<FotoIdx>, sorgente: Persona, destinazione: Persona, titolo: String, nota: String? = null, chiudi: () -> Unit) {
+    val sue = remember(foto, sorgente.id) { foto.filter { sorgente.id in it.persone } }
+    var scelte by remember(sorgente.id) { mutableStateOf(sue.map { it.id }.toSet()) }
+    val tutte = scelte.size == sue.size
+    AlertDialog(
+        onDismissRequest = chiudi,
+        title = { Text(titolo) },
+        text = {
+            Column(Modifier.width(640.dp)) {
+                nota?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                Text("Clic sulle foto per togliere quelle che non sono ${destinazione.nome ?: "questa persona"}: resteranno nel gruppo di partenza.",
+                    style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("${scelte.size} di ${sue.size}", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                    TextButton({ scelte = sue.map { it.id }.toSet() }, enabled = !tutte) { Text("Tutte") }
+                    TextButton({ scelte = emptySet() }, enabled = scelte.isNotEmpty()) { Text("Nessuna") }
+                }
+                Box(Modifier.height(420.dp)) {
+                    GrigliaFoto(sue, scelte, lato = 120.dp, onLongClick = { f -> scelte = if (f.id in scelte) scelte - f.id else scelte + f.id }) { i ->
+                        val fid = sue[i].id; scelte = if (fid in scelte) scelte - fid else scelte + fid
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton({
+                if (tutte) Stato.unisci(destinazione.id, sorgente.id) else Stato.spostaFoto(scelte.toList(), sorgente.id, destinazione)
+                chiudi()
+            }, enabled = scelte.isNotEmpty()) { Text(if (tutte) "Unisci tutto" else "Unisci ${scelte.size} foto") }
+        },
+        dismissButton = { TextButton(chiudi) { Text("Annulla") } },
+    )
 }
 
 // ---------------------------------------------------------------- CARTELLE / INDICE
