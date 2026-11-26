@@ -227,6 +227,7 @@ fun mostraInEsplora(f: File) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chiudi: () -> Unit) {
     var i by remember { mutableStateOf(iniziale.coerceIn(0, maxOf(0, lista.size - 1))) }
@@ -319,8 +320,7 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
         }
         val scorriPannello = rememberScrollState()
         Box(Modifier.width(380.dp).fillMaxHeight().background(MaterialTheme.colorScheme.surface)) {
-        androidx.compose.foundation.VerticalScrollbar(androidx.compose.foundation.rememberScrollbarAdapter(scorriPannello), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
-        Column(Modifier.fillMaxSize().verticalScroll(scorriPannello).padding(16.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(scorriPannello).padding(start = 16.dp, top = 16.dp, bottom = 16.dp, end = 22.dp)) {
             Text(formatoData.format(Date(f.data)), fontWeight = FontWeight.Bold)
             Text(f.nome, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(6.dp))
@@ -330,8 +330,8 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
                 Button({ Video.riproduci(fv, f.tempo) }, Modifier.padding(top = 6.dp)) { Text("▶ Riproduci da ${tempoVideo(f.tempo)}") }
                 Text("Momenti del video" + if (trovati.size > 1) " (in evidenza quelli trovati dalla ricerca)" else "",
                     fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 4.dp)) {
-                    items(momentiVideo, key = { it.id }) { m ->
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(vertical = 4.dp)) {
+                    for (m in momentiVideo) key(m.id) {
                         val evid = m.id in trovati; val attuale = m.id == f.id
                         Column(Modifier.width(84.dp).clickable { momento = m.id }, horizontalAlignment = Alignment.CenterHorizontally) {
                             Miniatura(m, Modifier.size(80.dp, 60.dp).then(
@@ -351,8 +351,8 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             }
             if (volti.isNotEmpty()) {
                 Text("Persone (clic per vedere o cambiare il gruppo, ✋ = aggiunta a mano)", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp))
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(vertical = 6.dp)) {
-                    items(volti, key = { it.id }) { v ->
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 6.dp)) {
+                    for (v in volti) key(v.id) {
                         val p = persone.firstOrNull { it.id == v.persona }
                         Column(Modifier.width(76.dp).clickable { voltoScelto = v }, horizontalAlignment = Alignment.CenterHorizontally) {
                             if (v.manuale && p != null) VoltoMini(p, 60.dp) else VoltoMini(v.id, 60.dp)
@@ -425,6 +425,9 @@ fun Visore(lista: List<FotoIdx>, iniziale: Int, apriPersona: (Long) -> Unit, chi
             TextButton({ modifica = true }) { Text("Modifica etichette") }
             TextButton({ Stato.query.value = ""; Stato.filtri.value = Filtri(album = f.album); chiudi() }) { Text("Altre foto di questa cartella") }
         }
+        // la barra va disegnata sopra il contenuto, altrimenti non si può trascinare
+        androidx.compose.foundation.VerticalScrollbar(androidx.compose.foundation.rememberScrollbarAdapter(scorriPannello),
+            Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 4.dp))
         }
     }
     voltoScelto?.let { v -> DialogoVolto(v, persone, { voltoScelto = null }) { id -> voltoScelto = null; apriPersona(id) } }
