@@ -534,7 +534,7 @@ fun SchermataPersone(apri: (Long) -> Unit) {
     Column(Modifier.fillMaxSize().padding(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Persone", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-            OutlinedButton({ riorganizza = true }, enabled = !av.attivo) { Text("Riorganizza volti senza nome…") }
+            OutlinedButton({ riorganizza = true }) { Text("Sensibilità volti e riorganizza…") }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.padding(vertical = 6.dp)) {
             OutlinedTextField(cerca, { cerca = it }, Modifier.width(320.dp), singleLine = true, placeholder = { Text("Cerca un nome") }, leadingIcon = { Icon(Icons.Default.Search, null) })
@@ -563,22 +563,37 @@ fun SchermataPersone(apri: (Long) -> Unit) {
     if (riorganizza) DialogoRiorganizza { riorganizza = false }
 }
 
+/** Cursore della sensibilità con cui i volti vengono raggruppati (usato in Persone e in Cartelle) */
+@Composable
+fun CursoreSensibilitaVolti(soglia: Float, cambia: (Float) -> Unit) {
+    Text("Sensibilità del riconoscimento volti: ${"%.2f".format(Locale.ITALIAN, soglia)} (normale 0,50)", fontWeight = FontWeight.Bold)
+    Slider(soglia, cambia, valueRange = 0.35f..0.75f, steps = 7)
+    Row { Text("Permissivo: unisce di più", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f)); Text("Severo: separa di più", style = MaterialTheme.typography.bodySmall) }
+}
+
 @Composable
 fun DialogoRiorganizza(chiudi: () -> Unit) {
     var soglia by remember { mutableFloatStateOf(Impostazioni.soglia) }
+    val av by Stato.avanzamento.collectAsState()
     AlertDialog(
         onDismissRequest = chiudi,
-        title = { Text("Riorganizza volti senza nome") },
+        title = { Text("Sensibilità volti e riorganizzazione") },
         text = {
-            Column(Modifier.width(460.dp)) {
-                Text("Le persone con nome e i volti tolti a mano non vengono toccati.", style = MaterialTheme.typography.bodySmall)
-                Text("Severità del riconoscimento", fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 10.dp))
-                Slider(soglia, { soglia = it }, valueRange = 0.35f..0.75f)
-                Row { Text("Permissivo: unisce di più", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f)); Text("Severo: separa di più", style = MaterialTheme.typography.bodySmall) }
+            Column(Modifier.width(480.dp)) {
+                Text("Vale per i volti senza nome: le persone con nome e i volti tolti a mano non vengono toccati.", style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(10.dp))
+                CursoreSensibilitaVolti(soglia) { soglia = it }
                 Spacer(Modifier.height(12.dp))
-                Button({ Impostazioni.soglia = soglia; Stato.ricalcolaGruppi(); chiudi() }) { Text("Riorganizza ora (veloce)") }
-                Spacer(Modifier.height(8.dp))
-                OutlinedButton({ Impostazioni.soglia = soglia; Stato.indicizza(rianalisiVolti = true); chiudi() }) { Text("Rianalizza in alta risoluzione (lenta)") }
+                if (av.attivo) {
+                    Text("Analisi in corso: la sensibilità scelta verrà usata quando i volti verranno raggruppati, alla fine dell'analisi.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(8.dp))
+                    Button({ Impostazioni.soglia = soglia; chiudi() }) { Text("Salva la sensibilità") }
+                } else {
+                    Button({ Impostazioni.soglia = soglia; Stato.ricalcolaGruppi(); chiudi() }) { Text("Riorganizza ora (veloce)") }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton({ Impostazioni.soglia = soglia; Stato.indicizza(rianalisiVolti = true); chiudi() }) { Text("Rianalizza in alta risoluzione (lenta)") }
+                }
             }
         },
         confirmButton = {},
@@ -769,6 +784,13 @@ fun SchermataIndice(finestra: java.awt.Window) {
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                     if (av.attivo) OutlinedButton({ Stato.ferma() }) { Text("Ferma") } else Button({ Stato.indicizza() }) { Text("Aggiorna indice") }
+                }
+                var sogliaVolti by remember { mutableFloatStateOf(Impostazioni.soglia) }
+                Column(Modifier.padding(top = 10.dp).widthIn(max = 520.dp)) {
+                    CursoreSensibilitaVolti(sogliaVolti) { sogliaVolti = it; Impostazioni.soglia = it }
+                    Text("Decide quanto devono somigliarsi due volti per finire nello stesso gruppo. Puoi sceglierla prima della prima analisi; " +
+                        "dopo, per applicarla ai gruppi già fatti, usa «Sensibilità volti e riorganizza…» nella scheda Persone.",
+                        style = MaterialTheme.typography.bodySmall)
                 }
                 var conZone by remember { mutableStateOf(Impostazioni.zone) }
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 8.dp)) {
