@@ -563,6 +563,31 @@ fun SchermataPersone(apri: (Long) -> Unit) {
     if (riorganizza) DialogoRiorganizza { riorganizza = false }
 }
 
+/** "Controlla aggiornamenti": l'unico punto in cui l'app usa internet, solo su richiesta */
+@Composable
+fun PannelloAggiornamenti() {
+    var esito by remember { mutableStateOf<Aggiornamenti.Esito?>(null) }
+    var inCorso by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+        OutlinedButton({ inCorso = true; scope.launch { esito = withContext(Dispatchers.IO) { Aggiornamenti.controlla() }; inCorso = false } }, enabled = !inCorso) {
+            Text(if (inCorso) "Controllo…" else "Controlla aggiornamenti")
+        }
+        Spacer(Modifier.width(10.dp))
+        val e = esito
+        when {
+            e == null -> Text("Usa internet solo quando premi il pulsante, per chiedere a GitHub il numero dell'ultima versione: non invia foto né dati.",
+                style = MaterialTheme.typography.bodySmall)
+            e.errore != null -> Text(e.errore, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            e.nuova -> {
+                Text("È disponibile la versione ${e.ultima} (hai ${Aggiornamenti.attuale ?: "?"}).", fontWeight = FontWeight.Bold)
+                TextButton({ runCatching { Desktop.getDesktop().browse(java.net.URI(e.pagina)) } }) { Text("Apri la pagina di download") }
+            }
+            else -> Text("Hai già l'ultima versione (${e.ultima}).", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
 /** Cursore della sensibilità con cui i volti vengono raggruppati (usato in Persone e in Cartelle) */
 @Composable
 fun CursoreSensibilitaVolti(soglia: Float, cambia: (Float) -> Unit) {
@@ -841,6 +866,7 @@ fun SchermataIndice(finestra: java.awt.Window) {
             }
         }
         OutlinedButton({ confermaAzzera = true }, enabled = !av.attivo) { Text("Rianalizza tutto da capo") }
+        PannelloAggiornamenti()
         Text("Cerca Foto per Windows ${System.getProperty("jpackage.app-version") ?: ""} · Pony10 · Modelli: FaceNet (Apache 2.0), UltraFace (MIT), età/sesso (MIT), CLIP multilingue (Apache 2.0 / MIT) · Video: FFmpeg (LGPL 2.1, ffmpeg.org)", style = MaterialTheme.typography.bodySmall)
     }
     }

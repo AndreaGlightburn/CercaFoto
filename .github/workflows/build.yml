@@ -9,6 +9,8 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      DOWNLOAD_TOKEN: ${{ secrets.DOWNLOAD_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -43,3 +45,13 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk CercaFoto.apk
           gh release delete ultima -y --cleanup-tag || true
           gh release create ultima CercaFoto.apk --title "Cerca Foto build ${{ github.run_number }}" --notes "Build automatica ${{ github.sha }}" --target ${{ github.sha }}
+      - name: Pubblica nel repository pubblico dei download
+        if: ${{ env.DOWNLOAD_TOKEN != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.DOWNLOAD_TOKEN }}
+        run: |
+          R=AndreaGlightburn/CercaFoto-download
+          V=1.0.${{ github.run_number }}
+          gh release create "android-$V" CercaFoto.apk -R $R --title "Cerca Foto per Android $V" \
+            --notes "APK firmato sempre con la stessa chiave: si installa sopra la versione precedente senza perdere indice e persone."
+          gh release list -R $R --limit 100 --json tagName -q '.[].tagName' | grep '^android-' | sort -t. -k3 -n -r | tail -n +4 | while read t; do gh release delete "$t" -R $R -y --cleanup-tag; done
