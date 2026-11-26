@@ -1,5 +1,10 @@
 package eu.iz2oii.cercafoto
 
+import androidx.compose.foundation.shape.RoundedCornerShape
+
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.items as itemsGriglia
+
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.rememberScrollbarAdapter
@@ -208,43 +213,68 @@ fun RigaPersona(o: Persona, somiglianza: Float?, scegli: () -> Unit) {
     }
 }
 
+/** Scelta di una persona: griglia di volti (si sceglie anche guardando i visi), ricerca per nome e barra di scorrimento */
 @Composable
 fun DialogoScegliPersona(titolo: String, persone: List<Persona>, escludi: Long?, simili: Map<Long, Float>, chiudi: () -> Unit,
                          extra: (@Composable () -> Unit)? = null, scegli: (Persona) -> Unit) {
     var cerca by remember { mutableStateOf("") }
+    var singoli by remember { mutableStateOf(false) }
     val q = Testo.normalizza(cerca)
-    val altre = persone.filter { it.id != escludi && (it.nome != null || it.foto >= 2) }
+    val altre = persone.filter { it.id != escludi && (it.nome != null || singoli || it.foto >= 2 || (simili[it.id] ?: 0f) >= 0.35f) }
     val trovate = if (q.isEmpty()) emptyList() else altre.filter { o -> o.nome?.let { Testo.normalizza(it).contains(q) } == true }
-    val suggerite = altre.filter { (simili[it.id] ?: 0f) >= 0.35f }.sortedByDescending { simili[it.id] }.take(6)
+    val suggerite = altre.filter { (simili[it.id] ?: 0f) >= 0.35f }.sortedByDescending { simili[it.id] }.take(10)
     val nominate = altre.filter { it.nome != null }.sortedBy { Testo.normalizza(it.nome!!) }
-    val senzaNome = altre.filter { it.nome == null }.sortedByDescending { simili[it.id] ?: 0f }
+    val senzaNome = altre.filter { it.nome == null }.sortedWith(compareByDescending<Persona> { simili[it.id] ?: 0f }.thenByDescending { it.foto })
+    val stato = rememberLazyGridState()
     AlertDialog(
         onDismissRequest = chiudi,
         title = { Text(titolo) },
         text = {
-            Column(Modifier.width(460.dp)) {
-                OutlinedTextField(cerca, { cerca = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Cerca un nome") },
-                    leadingIcon = { Icon(Icons.Default.Search, null) },
-                    trailingIcon = { if (cerca.isNotEmpty()) IconButton({ cerca = "" }) { Icon(Icons.Default.Close, "Cancella") } })
+            Column(Modifier.width(720.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(cerca, { cerca = it }, Modifier.weight(1f), singleLine = true, placeholder = { Text("Cerca un nome") },
+                        leadingIcon = { Icon(Icons.Default.Search, null) },
+                        trailingIcon = { if (cerca.isNotEmpty()) IconButton({ cerca = "" }) { Icon(Icons.Default.Close, "Cancella") } })
+                    Spacer(Modifier.width(8.dp))
+                    FilterChip(singoli, { singoli = !singoli }, label = { Text("Anche gruppi con 1 foto") })
+                }
                 extra?.invoke()
-                LazyColumn(Modifier.heightIn(max = 480.dp)) {
-                    fun sezione(t: String, lista: List<Persona>, k: String) {
-                        if (lista.isEmpty()) return
-                        item(key = "t$k") { Text(t, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 10.dp, bottom = 2.dp)) }
-                        items(lista, key = { "$k${it.id}" }) { o -> RigaPersona(o, simili[o.id]) { scegli(o) } }
+                Text("Clic su un volto per sceglierlo. Rotellina o barra a destra per scorrere.", style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp))
+                Box(Modifier.fillMaxWidth().height(520.dp).padding(top = 6.dp)) {
+                    LazyVerticalGrid(GridCells.Adaptive(112.dp), Modifier.fillMaxSize().padding(end = 12.dp), state = stato,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        fun sezione(t: String, lista: List<Persona>, k: String) {
+                            if (lista.isEmpty()) return
+                            item(key = "t$k", span = { GridItemSpan(maxLineSpan) }) {
+                                Text("$t (${lista.size})", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp, bottom = 2.dp))
+                            }
+                            itemsGriglia(lista, key = { "$k${it.id}" }) { o -> CellaPersona(o, simili[o.id]) { scegli(o) } }
+                        }
+                        if (q.isNotEmpty()) {
+                            sezione("Risultati", trovate, "r")
+                            if (trovate.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) { Text("Nessun nome trovato.", Modifier.padding(8.dp)) }
+                        } else {
+                            sezione("Più somiglianti", suggerite, "s"); sezione("Con nome (A-Z)", nominate, "n"); sezione("Senza nome", senzaNome, "x")
+                        }
                     }
-                    if (q.isNotEmpty()) {
-                        sezione("Risultati", trovate, "r")
-                        if (trovate.isEmpty()) item { Text("Nessun nome trovato.", Modifier.padding(8.dp)) }
-                    } else {
-                        sezione("Più somiglianti", suggerite, "s"); sezione("Con nome (A-Z)", nominate, "n"); sezione("Senza nome", senzaNome, "x")
-                    }
+                    androidx.compose.foundation.VerticalScrollbar(androidx.compose.foundation.rememberScrollbarAdapter(stato), Modifier.align(Alignment.CenterEnd).fillMaxHeight())
                 }
             }
         },
         confirmButton = {},
         dismissButton = { TextButton(chiudi) { Text("Annulla") } },
     )
+}
+
+@Composable
+fun CellaPersona(o: Persona, somiglianza: Float?, scegli: () -> Unit) {
+    Column(Modifier.clip(RoundedCornerShape(8.dp)).clickable(onClick = scegli).padding(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        VoltoMini(o, 96.dp)
+        Text(o.nome ?: "Senza nome", fontWeight = if (o.nome != null) FontWeight.Bold else FontWeight.Normal, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 2.dp))
+        Text("${o.foto} foto" + (somiglianza?.takeIf { it > 0f }?.let { " · ${(it * 100).toInt()}%" } ?: ""), style = MaterialTheme.typography.labelSmall)
+    }
 }
 
 @Composable
