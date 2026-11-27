@@ -1,5 +1,7 @@
 package eu.iz2oii.cercafoto
 
+import androidx.compose.foundation.horizontalScroll
+
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -123,7 +125,7 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
                 OutlinedTextField(
                     value = q, onValueChange = { vm.query.value = it },
                     modifier = Modifier.weight(1f).padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
-                    placeholder = { Text("cane al mare, Mario, 2024…") },
+                    placeholder = { Text(if (vm.perFile.collectAsStateWithLifecycle().value) "IMG_2023, Vacanze, DSC_00??…" else "cane al mare, Mario, 2024…") },
                     leadingIcon = { Icon(Icons.Default.Search, null) },
                     trailingIcon = { if (q.isNotEmpty()) IconButton({ vm.query.value = "" }) { Icon(Icons.Default.Close, "Cancella") } },
                     singleLine = true,
@@ -153,10 +155,16 @@ fun SchermataCerca(vm: AppVM, apri: (List<FotoIdx>, Int) -> Unit, vaiIndice: () 
         BannerUnita(vm)
         val nVideo by vm.nVideo.collectAsStateWithLifecycle()
         val tipo by vm.tipo.collectAsStateWithLifecycle()
-        if (nVideo > 0) Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            FilterChip(tipo == null, { vm.tipo.value = null }, label = { Text("Tutto") })
-            FilterChip(tipo == "foto", { vm.tipo.value = "foto" }, label = { Text("Foto") })
-            FilterChip(tipo == "video", { vm.tipo.value = "video" }, label = { Text("Video ($nVideo)") })
+        val perFile by vm.perFile.collectAsStateWithLifecycle()
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(!perFile, { vm.perFile.value = false }, label = { Text("Contenuto") })
+            FilterChip(perFile, { vm.perFile.value = true }, label = { Text("Nome file e cartella") })
+            if (nVideo > 0) {
+                Spacer(Modifier.width(6.dp))
+                FilterChip(tipo == null, { vm.tipo.value = null }, label = { Text("Tutto") })
+                FilterChip(tipo == "foto", { vm.tipo.value = "foto" }, label = { Text("Foto") })
+                FilterChip(tipo == "video", { vm.tipo.value = "video" }, label = { Text("Video ($nVideo)") })
+            }
         }
         if (av.attivo && av.totale > 0) {
             LinearProgressIndicator(

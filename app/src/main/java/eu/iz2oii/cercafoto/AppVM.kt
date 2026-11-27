@@ -41,13 +41,23 @@ class AppVM(app: Application) : AndroidViewModel(app) {
     val filtri = MutableStateFlow(Filtri())
     /** null = foto e video, "foto", "video" */
     val tipo = MutableStateFlow<String?>(null)
+    /** ricerca per nome del file e cartelle invece che per contenuto */
+    val perFile = MutableStateFlow(false)
+    private val percorsi = java.util.concurrent.ConcurrentHashMap<Long, String>()
+    /** percorso leggibile: cartella esterna + percorso relativo, oppure album della galleria; per i video quello del filmato */
+    fun percorso(f: FotoIdx): String = percorsi.getOrPut(f.id) {
+        val c = f.cartella
+        if (c != null) nomeCartella(c) + "/" + (Portatile.relativo(c, f.uri) ?: f.nome) else f.album + "/" + f.nome
+    }
     val nVideo = MutableStateFlow(0)
     val videoInAttesa = MutableStateFlow(0)
 
     private val PAROLE_VIDEO = setOf("video", "filmato", "filmati", "filmino", "filmini")
 
     val risultati: StateFlow<List<FotoIdx>> =
-        combine(query.debounce(250), foto, persone, filtri, tipo) { q, f, p, fi, t ->
+        combine(query.debounce(250), foto, persone, filtri, combine(tipo, perFile) { a, b -> a to b }) { q, f, p, fi, tf ->
+            val (t, pf) = tf
+            if (pf) return@combine comprimiVideo(fi.applica(Ricerca.cercaPercorso(q, f) { percorso(it) }).filter { t == null || (t == "video") == it.isVideo })
             var qn = " " + Testo.normalizza(q) + " "
             var tp = t
             for (w in PAROLE_VIDEO) if (qn.contains(" $w ")) { tp = "video"; qn = qn.replace(" $w ", " ") }

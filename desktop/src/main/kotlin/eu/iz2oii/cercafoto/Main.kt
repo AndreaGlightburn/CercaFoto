@@ -136,17 +136,27 @@ fun SchermataCerca(apri: (List<FotoIdx>, Int) -> Unit, apriFiltro: (Long) -> Uni
     val aggiuntaEsempi by Stato.aggiuntaEsempi.collectAsState()
     val filtroEsempi = filtriUtente.firstOrNull { it.id == aggiuntaEsempi }
 
-    val descr by Stato.descrizione.collectAsState()
+    val descr0 by Stato.descrizione.collectAsState()
+    val perFile by Stato.perFile.collectAsState()
+    val descr = descr0 && !perFile
     Column(Modifier.fillMaxSize().padding(8.dp)) {
-        if (Clip.disponibile) Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
-            FilterChip(!descr, { Stato.descrizione.value = false }, label = { Text("Parole chiave") })
-            FilterChip(descr, { Stato.descrizione.value = true }, label = { Text("Descrizione libera") })
-            Text(if (descr) "Descrivi la foto come la racconteresti: «bambino che soffia le candeline», «tramonto al mare con la barca»"
-                else "Nomi, persone, oggetti, colori, date: «Mario cane», «donna anziana», «2023 mare»", style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
+            FilterChip(!descr && !perFile, { Stato.descrizione.value = false; Stato.perFile.value = false }, label = { Text("Parole chiave") })
+            if (Clip.disponibile) FilterChip(descr, { Stato.descrizione.value = true; Stato.perFile.value = false }, label = { Text("Descrizione libera") })
+            FilterChip(perFile, { Stato.perFile.value = true }, label = { Text("Nome file e cartella") })
+            Text(when {
+                perFile -> "Parti del nome o del percorso: «IMG_2023», «Vacanze Sardegna», «DSC_00??», «\"Natale 2022\"» (* e ? come jolly)"
+                descr -> "Descrivi la foto come la racconteresti: «bambino che soffia le candeline», «tramonto al mare con la barca»"
+                else -> "Nomi, persone, oggetti, colori, date: «Mario cane», «donna anziana», «2023 mare»"
+            }, style = MaterialTheme.typography.bodySmall)
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedTextField(q, { Stato.query.value = it }, Modifier.weight(1f), singleLine = true,
-                placeholder = { Text(if (descr) "Descrivi la foto che cerchi…" else "Cerca: Mario, donna anziana, maglia rossa, cane, mare, 2023…") },
+                placeholder = { Text(when {
+                    perFile -> "Nome del file o della cartella…"
+                    descr -> "Descrivi la foto che cerchi…"
+                    else -> "Cerca: Mario, donna anziana, maglia rossa, cane, mare, 2023…"
+                }) },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
                 trailingIcon = { if (q.isNotEmpty()) IconButton({ Stato.query.value = "" }) { Icon(Icons.Default.Close, "Cancella") } })
             Spacer(Modifier.width(8.dp))

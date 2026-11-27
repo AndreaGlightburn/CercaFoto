@@ -34,6 +34,8 @@ object Stato {
 
     /** false = parole chiave (come sul telefono), true = descrizione libera (CLIP) */
     val descrizione = MutableStateFlow(false)
+    /** ricerca per nome del file e cartelle (esclude le altre due modalità) */
+    val perFile = MutableStateFlow(false)
     /** null = tutto, "foto" = solo foto, "video" = solo video */
     val tipo = MutableStateFlow<String?>(null)
     val nVideo = MutableStateFlow(0)
@@ -50,7 +52,7 @@ object Stato {
     /** zone (dettagli) delle foto, se calcolate */
     fun zone() = zoneM
 
-    private data class Richiesta(val q: String, val descr: Boolean, val filtro: Long?, val tipo: String?)
+    private data class Richiesta(val q: String, val descr: Boolean, val filtro: Long?, val tipo: String?, val perFile: Boolean = false)
 
     private val PAROLE_VIDEO = setOf("video", "filmato", "filmati", "filmino", "filmini", "clip")
 
@@ -60,6 +62,10 @@ object Stato {
         val insiemi = ArrayList<Set<Long>>()
         fu.firstOrNull { it.id == r.filtro }?.let { insiemi += FiltriUtente.membri(it, vettori).map { m -> m.first }.toSet() }
         var tipo = r.tipo
+        if (r.perFile) {
+            val base = Ricerca.cercaPercorso(q, f) { x -> x.video ?: x.percorso }
+            return comprimiVideo(fi.applica(base.filter { x -> insiemi.all { x.id in it } && (tipo == null || (tipo == "video") == x.isVideo) }))
+        }
         if (!r.descr) {
             var qn = " " + Testo.normalizza(q) + " "
             for (w in PAROLE_VIDEO) if (qn.contains(" $w ")) { tipo = "video"; qn = qn.replace(" $w ", " ") }
@@ -99,7 +105,7 @@ object Stato {
     }
 
     val risultati: StateFlow<List<FotoIdx>> =
-        combine(combine(query, descrizione, filtroAttivo, tipo) { q, d, fa, t -> Richiesta(q, d, fa, t) }.debounce(300), foto, persone, filtri, filtriUtente) { r, f, p, fi, fu ->
+        combine(combine(query, descrizione, filtroAttivo, tipo, perFile) { q, d, fa, t, pf -> Richiesta(q, d, fa, t, pf) }.debounce(300), foto, persone, filtri, filtriUtente) { r, f, p, fi, fu ->
             calcola(r, f, p, fi, fu)
         }
             .flowOn(Dispatchers.Default)

@@ -101,6 +101,27 @@ object Ricerca {
     private fun conTesto(f: FotoIdx, t: String) = t.length >= 3 && (f.testo.contains(t) || f.testoManuali.contains(t) ||
         Testo.normalizza(f.nome).contains(t) || Testo.normalizza(f.album).contains(t))
 
+    /** minuscole e senza accenti, ma con punteggiatura e separatori (per nomi di file e cartelle) */
+    fun semplificaPercorso(s: String): String =
+        java.text.Normalizer.normalize(s.lowercase(), java.text.Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").replace('\\', '/')
+
+    /**
+     * Ricerca per nome file e cartelle: ogni parola deve comparire (anche in parte) nel percorso completo;
+     * "frase tra virgolette" resta unita; * e ? funzionano come jolly (IMG_2023*, DSC_00??).
+     */
+    fun cercaPercorso(query: String, foto: List<FotoIdx>, percorso: (FotoIdx) -> String): List<FotoIdx> {
+        val parole = Regex("\"([^\"]+)\"|(\\S+)").findAll(query).map { m -> semplificaPercorso(m.groupValues[1].ifEmpty { m.groupValues[2] }) }
+            .filter { it.isNotBlank() }.toList()
+        if (parole.isEmpty()) return foto
+        val regole: List<(String) -> Boolean> = parole.map { p ->
+            if ('*' in p || '?' in p) {
+                val r = Regex(p.split('*').joinToString(".*") { pezzo -> pezzo.split('?').joinToString(".") { Regex.escape(it) } })
+                val f: (String) -> Boolean = { s -> r.containsMatchIn(s) }; f
+            } else { val f: (String) -> Boolean = { s -> s.contains(p) }; f }
+        }
+        return foto.filter { f -> val s = semplificaPercorso(percorso(f)); regole.all { it(s) } }
+    }
+
     fun cerca(query: String, foto: List<FotoIdx>, persone: List<Persona>): List<FotoIdx> {
         var q = " " + Testo.normalizza(query) + " "
         if (q.isBlank()) return foto
